@@ -1,2 +1,8 @@
 # The actual dataset
 data/
+
+# The cloned_repo for test
+cloned_repo/
+
+# __pycache__
+__pycache__/
