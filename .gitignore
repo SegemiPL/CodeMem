@@ -6,3 +6,6 @@ cloned_repo/
 
 # __pycache__
 __pycache__/
+
+# env file
+.env
