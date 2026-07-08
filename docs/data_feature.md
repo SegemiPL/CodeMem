@@ -9,14 +9,13 @@ This doc offers a global insight for some feature of the origin dataset
 - Totol Instance: 2438
 - Same Base Commit Numbers: 223
     - These 223 same base commit has 2-3 instance
-    - These instance can be used to construct the "Delete" subset
 
 ### About the patch file
 
 - Almost all the files in patch are .py, some files are not:
 {'in', 'pyx', 'txt', 'pyi', 'yaml', 'pxd', 'c', 'build', 'md', 'ipynb', 'yml', 'sh', 'h', 'rst'}
 
-- maybe some parts of these should be filtered
+- maybe some parts of these should be filtered, such as the "md","in","txt"
 
 ### About the dependency relationship
 
