@@ -1,3 +1,9 @@
+""" Evaluate-SWE-Gym-Revert.py
+Evaluate scripts for "Revert" part of the CodeMem Datasets
+
+In-Develop
+
+"""
 from constants.addr import CODE_MEM_ADDR,load_json
 from constants.config import init_env_and_logger
 

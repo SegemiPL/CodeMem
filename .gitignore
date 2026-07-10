@@ -1,6 +1,9 @@
 # The actual dataset
 data/
 
+# .DS_Store
+.DS_Store/
+
 # The cloned_repo for test
 cloned_repo/
 

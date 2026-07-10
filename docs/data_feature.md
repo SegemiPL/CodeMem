@@ -1,6 +1,6 @@
 # Data_Feature
 
-This doc offers a global insight for some feature of the origin dataset
+This document offers a global insight for some feature of the origin dataset
 
 ## SWE-Gym
 
@@ -19,8 +19,8 @@ This doc offers a global insight for some feature of the origin dataset
 
 ### About the dependency relationship
 
-- the dict under repo_dependency.json record the dependency between instances across different repo
-- These data can be used to filter the target and middle(When a target has at least 5 no-dependent middle instance, then we choose it as a target)
+- the dict under repo_dependency.json records the dependency between instances across different repos.
+- These data can be used to filter the target and middle (E.g. When a target has at least 5 (or other) non-dependent middle instance, then we choose it as a target)
 - The dict structure:
 - repo
     - Target instance id                             # The Target instance id in each repo
@@ -30,6 +30,9 @@ This doc offers a global insight for some feature of the origin dataset
 
 - the dict under file_dependency is formed from repo_dependency, filtered by removing middle instance with same touched-files.
 - The structure is all the same 
+
+- The dict under instance_qa.json records QA for each target.
+- Currently there are only 10 instances' attempts, with 7 actually available instances (3 generated failed).
 
 
 
