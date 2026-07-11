@@ -3,6 +3,7 @@ import json
 # File Dependency and Repo Dependency addr of SWE-Gym filtered data
 FILE_DEPENDENCY_ADDR = "../data/file_dependency.json"
 REPO_DEPENDENCY_ADDR = "../data/repo_dependency.json"
+TARGET_SEQUENCE_ADDR = "../data/target_sequence.json"
 
 # Instance info and qa addr of SWE-Gym
 INSTANCE_INFO_ADDR = "../data/instance_info.json"
