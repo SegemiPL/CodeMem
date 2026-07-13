@@ -11,6 +11,7 @@ INSTANCE_QA_ADDR = "../data/instance_qa.json"
 
 # Instance_query_addr of OctoBench data
 INSTANCE_QUERY_ADDR = "../data/octo_instance_query.json"
+SPLIT_QUERY_ADDR = "../data/octobench_split_user_query.jsonl"
 
 # Code_Mem all dataset
 CODE_MEM_ADDR = "../data/code_mem_dataset.json"
