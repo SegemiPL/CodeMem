@@ -183,22 +183,54 @@ def test_middles(
     return [test_instance(middle, workspace_tree) for middle in middles]
 
 
-def add_middle_rewards(
-    rewards: dict[str, float], results: list[dict[str, Any]]
+def test_group_metrics(
+    result: dict[str, Any], group: str, expected: str, correct_label: str = "correct"
+) -> dict[str, int | float]:
+    """Return readable count/ratio metrics for a test group.
+
+    - total: number of tests considered for this group.
+    - {correct_label}: number whose status matches `expected`.
+    - ratio: {correct_label} / total (1.0 if no tests and none expected, 0.0 if
+      none ran but some were expected).
+    """
+    tests = [v for v in result["tests"].values() if v["group"] == group]
+    total_expected = result.get("expected_test_count", {}).get(group, 0)
+    if not tests:
+        if total_expected == 0:
+            return {"total": 0, correct_label: 0, "ratio": 1.0}
+        return {"total": total_expected, correct_label: 0, "ratio": 0.0}
+    correct = sum(item["status"] == expected for item in tests)
+    return {"total": len(tests), correct_label: correct, "ratio": correct / len(tests)}
+
+
+def add_middle_metrics(
+    metrics: dict[str, Any], results: list[dict[str, Any]]
 ) -> None:
     for index, result in enumerate(results, start=1):
         prefix = f"middle_{index:02d}"
-        rewards[f"{prefix}_fail_to_pass"] = rate(result, "FAIL_TO_PASS", "pass")
-        rewards[f"{prefix}_pass_to_pass"] = rate(result, "PASS_TO_PASS", "pass")
+        for suffix, group, expected in (
+            ("fail_to_pass", "FAIL_TO_PASS", "pass"),
+            ("pass_to_pass", "PASS_TO_PASS", "pass"),
+        ):
+            for key, value in test_group_metrics(result, group, expected, "passed").items():
+                metrics[f"{prefix}_{suffix}_{key}"] = value
 
 
-def diff_metric(reference_tree: str, current_tree: str, files: list[str], name: str) -> float:
+def files_match(reference_tree: str, current_tree: str, files: list[str], name: str) -> bool:
     completed = run(
         "git", "diff", "--no-ext-diff", "--binary", reference_tree, current_tree, "--", *files,
         check=False,
     )
     (LOGS / f"{name}.diff").write_text(completed.stdout)
-    return float(completed.returncode == 0 and not completed.stdout)
+    return completed.returncode == 0 and not completed.stdout
+
+
+def _format_metric_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}"
+    return str(value)
 
 
 def _is_compaction_event(event: dict[str, Any]) -> bool:
@@ -294,7 +326,7 @@ def main(phase: str) -> None:
     middles = config["middles"]
     current = snapshot_tree()
     details: dict[str, Any] = {"phase": phase, "workspace_tree": current}
-    rewards: dict[str, float] = {}
+    metrics: dict[str, Any] = {}
 
     # After solve target 
     if phase == "solve_target":
@@ -306,11 +338,13 @@ def main(phase: str) -> None:
 
         # record the test result
         details["target"] = target_result
-        rewards = {
-            "target_fail_to_pass": rate(target_result, "FAIL_TO_PASS", "pass"),
-            "target_pass_to_pass": rate(target_result, "PASS_TO_PASS", "pass"),
-        }
-        rewards["reward"] = min(rewards.values())
+        metrics = {}
+        for suffix, group, expected, label in (
+            ("fail_to_pass", "FAIL_TO_PASS", "pass", "passed"),
+            ("pass_to_pass", "PASS_TO_PASS", "pass", "passed"),
+        ):
+            for key, value in test_group_metrics(target_result, group, expected, label).items():
+                metrics[f"target_{suffix}_{key}"] = value
 
     # Middle and compact
     elif phase.startswith("solve_middle_") or phase == "compact":
@@ -329,12 +363,14 @@ def main(phase: str) -> None:
             middle_results = test_middles(middles[:middle_index], current)
 
             details.update(target=target_result, middles=middle_results)
-            rewards = {
-                "target_fail_to_pass": rate(target_result, "FAIL_TO_PASS", "pass"),
-                "target_pass_to_pass": rate(target_result, "PASS_TO_PASS", "pass"),
-            }
-            add_middle_rewards(rewards, middle_results)
-            rewards["reward"] = min(rewards.values())
+            metrics = {}
+            for suffix, group, expected, label in (
+                ("fail_to_pass", "FAIL_TO_PASS", "pass", "passed"),
+                ("pass_to_pass", "PASS_TO_PASS", "pass", "passed"),
+            ):
+                for key, value in test_group_metrics(target_result, group, expected, label).items():
+                    metrics[f"target_{suffix}_{key}"] = value
+            add_middle_metrics(metrics, middle_results)
 
             # if this is the last middle instance, save it as a checkpoint for restoration.
             is_checkpoint = middle_index == len(middles)
@@ -343,7 +379,7 @@ def main(phase: str) -> None:
         
         # After compact
         else:
-            rewards = {"reward": 1.0}
+            metrics = {}
             is_checkpoint = True
         
         # If this session should be resume, record it
@@ -354,7 +390,14 @@ def main(phase: str) -> None:
                     "No agent session directory found under /logs/agent; "
                     "the restore branch will fail its setup"
                 )
-            details["session"] = record_pre_final_session()
+            session = record_pre_final_session()
+            details["session"] = session
+
+        if phase == "compact":
+            metrics = {
+                "session_compacted_before_final": session["session_compacted_before_final"],
+                "manual_compaction_requested": config["manual_compaction_requested"],
+            }
     
     # After revert the target
     elif phase == "revert_target":
@@ -374,30 +417,26 @@ def main(phase: str) -> None:
         details.update(target=target_result, middles=middle_results)
 
         # matrics
-        rewards = {
+        metrics = {
             # git diff
-            "file_revert_match": diff_metric(
+            "file_revert_match": files_match(
                 (STATE / "baseline.tree").read_text().strip(), current,
                 target["touched_files"], "target-revert",
             ),
 
-            # how many fail-to-pass return to fail
-            "target_fail_to_pass_reverted": rate(target_result, "FAIL_TO_PASS", "fail"),
-
-            # how many pass-to-pass remain as pass
-            "target_pass_to_pass": rate(target_result, "PASS_TO_PASS", "pass"),
-
             # whether the session has been compact
-            "session_compacted_before_final": float(session["session_compacted_before_final"]),
+            "session_compacted_before_final": session["session_compacted_before_final"],
 
             # whether we manually require the session to be compacted
-            "manual_compaction_requested": float(config["manual_compaction_requested"]),
+            "manual_compaction_requested": config["manual_compaction_requested"],
         }
-        add_middle_rewards(rewards, middle_results)
-        rewards["reward"] = min(
-            value for key, value in rewards.items()
-            if key not in {"session_compacted_before_final", "manual_compaction_requested"}
-        )
+        for suffix, group, expected, label in (
+            ("fail_to_pass", "FAIL_TO_PASS", "fail", "reverted"),
+            ("pass_to_pass", "PASS_TO_PASS", "pass", "passed"),
+        ):
+            for key, value in test_group_metrics(target_result, group, expected, label).items():
+                metrics[f"target_{suffix}_{key}"] = value
+        add_middle_metrics(metrics, middle_results)
     
     # After restore the target
     elif phase == "restore_target":
@@ -413,43 +452,37 @@ def main(phase: str) -> None:
         details.update(target=target_result, middles=middle_results)
 
         # matrics
-        rewards = {
+        metrics = {
             # git diff
-            "file_restore_match": diff_metric(
+            "file_restore_match": files_match(
                 (STATE / "after_target.tree").read_text().strip(), current,
                 target["touched_files"], "target-restore",
             ),
 
-            # how many fail-to-pass return to pass after restore
-            "target_fail_to_pass": rate(target_result, "FAIL_TO_PASS", "pass"),
-
-            # how many pass-to-pass remain as pass
-            "target_pass_to_pass": rate(target_result, "PASS_TO_PASS", "pass"),
-
             # whether the session has been compacted
-            "session_compacted_before_final": float(session["session_compacted_before_final"]),
+            "session_compacted_before_final": session["session_compacted_before_final"],
 
             # whether we manually require the session to be compacted
-            "manual_compaction_requested": float(config["manual_compaction_requested"]),
+            "manual_compaction_requested": config["manual_compaction_requested"],
         }
-
-        # problems
-        add_middle_rewards(rewards, middle_results)
-        rewards["reward"] = min(
-            value for key, value in rewards.items()
-            if key not in {"session_compacted_before_final", "manual_compaction_requested"}
-        )
+        for suffix, group, expected, label in (
+            ("fail_to_pass", "FAIL_TO_PASS", "pass", "passed"),
+            ("pass_to_pass", "PASS_TO_PASS", "pass", "passed"),
+        ):
+            for key, value in test_group_metrics(target_result, group, expected, label).items():
+                metrics[f"target_{suffix}_{key}"] = value
+        add_middle_metrics(metrics, middle_results)
 
     else:
         raise ValueError(f"Unknown evaluation phase: {phase}")
 
     (LOGS / "metrics.json").write_text(json.dumps(details, indent=2) + "\n")
-    (LOGS / "reward.json").write_text(json.dumps(rewards, indent=2) + "\n")
+    (LOGS / "reward.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
     # One-line progress marker; Harbor captures verifier stdout into the
     # trial log, so this is what the monitor and humans grep for.
     summary = " ".join(
-        f"{key}={value:.2f}" for key, value in sorted(rewards.items())
+        f"{key}={_format_metric_value(value)}" for key, value in sorted(metrics.items())
     )
     print(f"[codemem] phase={phase} {summary}", flush=True)
 

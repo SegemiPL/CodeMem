@@ -13,12 +13,16 @@ record_trajectory = true
 solve_target = """
 Solve the following target issue in the repository. Work carefully, run relevant tests, and leave the implementation in the working tree.
 
+You must solve this issue by editing files inside the repository directly. Do not use external tools such as curl, wget, a browser, or any API to fetch patches, hints, or solutions.
+
 Instance: {instance_id}
 
 {problem_statement}
 """
 solve_middle = """
 Now solve later independent issue {middle_index} of {middle_count} without regressing the target solution or previously solved middle issues already present in the working tree.
+
+You must solve this issue by editing files inside the repository directly. Do not use external tools such as curl, wget, a browser, or any API to fetch patches, hints, or solutions.
 
 Instance: {instance_id}
 
@@ -28,14 +32,12 @@ revert_target = """
 Revert only the implementation changes that solved target instance {target_instance_id}. Preserve the solutions for these middle instances and all unrelated work:
 {middle_instance_ids}
 
-The target originally touched these files:
-{touched_files}
+You must revert the changes by manually editing files. Do not use git commands such as git revert, git checkout, or git reset to undo the target solution.
 """
 restore_target = """
 The files originally touched while solving target instance {target_instance_id} have been removed. Restore their exact post-target-solution contents while preserving the solutions for these middle instances:
 {middle_instance_ids}
 
-Files:
-{touched_files}
+You must restore the files by manually recreating or editing them. Do not rely on git commands to recover the deleted files.
 """
 manual_compact = "/compact"

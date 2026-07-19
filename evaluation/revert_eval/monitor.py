@@ -24,11 +24,18 @@ def _now() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
-def _reward_summary(rewards: dict[str, Any]) -> str:
+def _metrics_summary(metrics: dict[str, Any]) -> str:
+    def _fmt(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return f"{value:.2f}"
+        return str(value)
+
     return " ".join(
-        f"{key}={value:.2f}"
-        for key, value in sorted(rewards.items())
-        if isinstance(value, (int, float))
+        f"{key}={_fmt(value)}"
+        for key, value in sorted(metrics.items())
+        if isinstance(value, (int, float, bool))
     )
 
 
@@ -109,30 +116,30 @@ def scan(job_dir: Path, state: dict[str, dict[str, Any]]) -> list[str]:
 
         # Steps whose verifier results just became available.
         for name in [n for n in step_names if n in verified - entry["done"]]:
-            rewards = json.loads(
+            metrics = json.loads(
                 (steps_dir / name / "verifier" / "reward.json").read_text()
             )
             lines.append(
                 f"[{_now()}] {trial.name}: step {name} verified — "
-                f"{_reward_summary(rewards)}"
+                f"{_metrics_summary(metrics)}"
             )
             entry["done"].add(name)
 
-        # The active step's verifier may have just written rewards to the
+        # The active step's verifier may have just written metrics to the
         # live mount, moments before they are moved into the step dir.
         active = next(
             (n for n in step_names if n in started and n not in verified), None
         )
-        live_reward = trial / "verifier" / "reward.json"
-        if active and active not in entry["done"] and live_reward.is_file():
+        live_metrics = trial / "verifier" / "reward.json"
+        if active and active not in entry["done"] and live_metrics.is_file():
             try:
-                rewards = json.loads(live_reward.read_text())
+                metrics = json.loads(live_metrics.read_text())
             except json.JSONDecodeError:
-                rewards = None  # partially written; retry next pass
-            if rewards is not None:
+                metrics = None  # partially written; retry next pass
+            if metrics is not None:
                 lines.append(
                     f"[{_now()}] {trial.name}: step {active} verified — "
-                    f"{_reward_summary(rewards)}"
+                    f"{_metrics_summary(metrics)}"
                 )
                 entry["done"].add(active)
 
@@ -147,12 +154,12 @@ def scan(job_dir: Path, state: dict[str, dict[str, Any]]) -> list[str]:
                 continue
             entry["finished"] = True
             verifier_result = result.get("verifier_result") or {}
-            rewards = verifier_result.get("rewards") or {}
+            metrics = verifier_result.get("rewards") or {}
             exception = result.get("exception_info")
-            if rewards:
+            if metrics:
                 lines.append(
                     f"[{_now()}] {trial.name}: TRIAL FINISHED — "
-                    f"{_reward_summary(rewards)}"
+                    f"{_metrics_summary(metrics)}"
                 )
             elif exception:
                 lines.append(

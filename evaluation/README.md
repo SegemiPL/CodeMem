@@ -81,7 +81,7 @@ the retained job output.
 ## Progress monitoring
 
 While a job runs, print one-line progress updates (step starts, per-step
-verifier rewards, trial completion) in a terminal:
+verifier metrics, trial completion) in a terminal:
 
 ```bash
 python3 -m evaluation.revert_eval.cli monitor evaluation/results/<job-name>
@@ -95,11 +95,18 @@ line at the end of every step, which lands in each step's
 ## Metrics and artifacts
 
 Every step stores `metrics.json` with per-test status (`pass`, `fail`, or
-`error`), return code, and bounded output. Harbor's `reward.json` contains scalar
-metrics.
+`error`), return code, and bounded output. For Harbor compatibility the verifier
+still writes `reward.json`, but it no longer contains an RL-style `reward`
+field; instead it holds readable per-step metrics.
 
-- Revert file metric: target-touched files must match the target base tree.
-- Restore file metric: target-touched files must match the saved post-target tree.
+- `file_revert_match` / `file_restore_match`: booleans indicating whether the
+  target-touched files match the target base tree or saved post-target tree.
+- For each target or middle test group, metrics expose three fields:
+  `{prefix}_fail_to_pass_total`, `{prefix}_fail_to_pass_passed`, and
+  `{prefix}_fail_to_pass_ratio`, plus the corresponding `pass_to_pass` fields.
+  After solve/restore, `passed` counts tests that passed; after revert,
+  Fail-to-Pass metrics use `{prefix}_fail_to_pass_reverted` to count tests that
+  returned to fail.
 - After solve/restore: target Fail-to-Pass and Pass-to-Pass tests must pass.
 - After revert: target Fail-to-Pass tests must fail (an error is not accepted),
   while target Pass-to-Pass and all middle tests must pass.

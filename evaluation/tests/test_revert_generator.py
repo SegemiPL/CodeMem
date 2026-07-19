@@ -225,17 +225,17 @@ class RuntimeEvaluatorTest(unittest.TestCase):
 
         (self.repo / "target.py").write_text("before\n")
         runtime_evaluator.main("revert_target")
-        rewards = json.loads((self.logs / "reward.json").read_text())
-        self.assertEqual(rewards["file_revert_match"], 1.0)
-        self.assertEqual(rewards["session_compacted_before_final"], 1.0)
+        metrics = json.loads((self.logs / "reward.json").read_text())
+        self.assertTrue(metrics["file_revert_match"])
+        self.assertTrue(metrics["session_compacted_before_final"])
 
         after_middles = (self.state / "after_middles.tree").read_text().strip()
         runtime_evaluator.restore_tree(after_middles)
         (self.repo / "target.py").unlink()
         (self.repo / "target.py").write_text("target solved\n")
         runtime_evaluator.main("restore_target")
-        rewards = json.loads((self.logs / "reward.json").read_text())
-        self.assertEqual(rewards["file_restore_match"], 1.0)
+        metrics = json.loads((self.logs / "reward.json").read_text())
+        self.assertTrue(metrics["file_restore_match"])
 
     def test_pytest_uses_the_resolved_test_environment(self) -> None:
         instance = {

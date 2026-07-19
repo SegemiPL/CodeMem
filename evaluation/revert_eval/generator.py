@@ -305,13 +305,11 @@ workdir = "/testbed"
         self, task_dir: Path, target: Instance, middles: tuple[Instance, ...]
     ) -> None:
         prompts = self.config.prompts
-        touched = "\n".join(f"- {path}" for path in target.touched_files)
         middle_ids = "\n".join(f"- {middle.instance_id}" for middle in middles)
         values = {
             "target_instance_id": target.instance_id,
             "middle_instance_id": ", ".join(middle.instance_id for middle in middles),
             "middle_instance_ids": middle_ids,
-            "touched_files": touched,
         }
         instructions = {
             "solve_target": _format_prompt(prompts.solve_target, target),
