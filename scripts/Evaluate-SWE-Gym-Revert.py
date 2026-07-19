@@ -1,19 +1,12 @@
-""" Evaluate-SWE-Gym-Revert.py
-Evaluate scripts for "Revert" part of the CodeMem Datasets
+"""Compatibility entry point for the Harbor-native revert evaluator."""
 
-In-Develop
+import sys
+from pathlib import Path
 
-"""
-from constants.addr import CODE_MEM_ADDR,load_json
-from constants.config import init_env_and_logger
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def main():
-    # initialize logger
-    logger = init_env_and_logger()
-    logger.info("Logger setup success!")
+from evaluation.revert_eval.cli import main
 
-    ## Step1: Load the datasets
-    ds = load_json(CODE_MEM_ADDR)
 
 if __name__ == "__main__":
     main()

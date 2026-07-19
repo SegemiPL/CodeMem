@@ -1,0 +1,41 @@
+[execution]
+middle_count = 1
+agent_timeout_sec = 3000
+verifier_timeout_sec = 1800
+build_timeout_sec = 1800
+cpus = 1
+memory_mb = 8192
+storage_mb = 10240
+manual_compact_before_final = false
+record_trajectory = true
+
+[prompts]
+solve_target = """
+Solve the following target issue in the repository. Work carefully, run relevant tests, and leave the implementation in the working tree.
+
+Instance: {instance_id}
+
+{problem_statement}
+"""
+solve_middle = """
+Now solve later independent issue {middle_index} of {middle_count} without regressing the target solution or previously solved middle issues already present in the working tree.
+
+Instance: {instance_id}
+
+{problem_statement}
+"""
+revert_target = """
+Revert only the implementation changes that solved target instance {target_instance_id}. Preserve the solutions for these middle instances and all unrelated work:
+{middle_instance_ids}
+
+The target originally touched these files:
+{touched_files}
+"""
+restore_target = """
+The files originally touched while solving target instance {target_instance_id} have been removed. Restore their exact post-target-solution contents while preserving the solutions for these middle instances:
+{middle_instance_ids}
+
+Files:
+{touched_files}
+"""
+manual_compact = "/compact"

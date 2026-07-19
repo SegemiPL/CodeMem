@@ -12,3 +12,10 @@ __pycache__/
 
 # env file
 .env
+
+# Generated Harbor tasks and evaluation results
+evaluation/generated/
+evaluation/results/
+
+# Jobs
+jobs/
