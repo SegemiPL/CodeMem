@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluation.harbor import CODEX_TOOLCHAIN_PATH, write_job_config
+from evaluation.harbor import AGENT_TOOLCHAINS, AGENT_TOOLCHAIN_TARGET, write_job_config
 
 
 class HarborJobConfigTest(unittest.TestCase):
@@ -13,37 +13,30 @@ class HarborJobConfigTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def toolchain(self) -> Path:
-        root = self.root / "toolchain"
+    def toolchain(self, agent: str) -> Path:
+        root = self.root / agent
         (root / "bin").mkdir(parents=True)
-        for executable in ("codex", "node", "rg"):
+        for executable in AGENT_TOOLCHAINS[agent].required_executables:
             (root / "bin" / executable).touch()
         return root
 
-    def write(self, **kwargs) -> str:
+    def write(self, agent: str = "codex", **kwargs) -> str:
         path = self.root / "job.yaml"
-        write_job_config(
-            path,
-            tasks_path=self.root / "tasks",
-            agent=kwargs.pop("agent", "codex"),
-            model="openai/gpt-5.3-codex",
-            environment=kwargs.pop("environment", "docker"),
-            concurrency=1,
-            jobs_dir=self.root / "results",
-            n_attempts=kwargs.pop("n_attempts", 1),
-            **kwargs,
-        )
+        write_job_config(path, tasks_path=self.root / "tasks", agent=agent,
+            model="test/model", environment=kwargs.pop("environment", "docker"),
+            concurrency=1, jobs_dir=self.root / "results", n_attempts=kwargs.pop("n_attempts", 1), **kwargs)
         return path.read_text()
 
-    def test_shared_codex_toolchain_is_read_only_and_on_path(self) -> None:
-        toolchain = self.toolchain()
-        content = self.write(codex_toolchain=toolchain, codex_version="0.144.6")
-        self.assertIn("type: bind", content)
-        self.assertIn(f'source: "{toolchain.resolve()}"', content)
-        self.assertIn('target: "/opt/codemem-agent"', content)
-        self.assertIn("read_only: true", content)
-        self.assertIn(f'PATH: "{CODEX_TOOLCHAIN_PATH}"', content)
-        self.assertIn('version: "0.144.6"', content)
+    def test_supported_agent_toolchains_are_read_only_and_on_path(self) -> None:
+        for agent, definition in AGENT_TOOLCHAINS.items():
+            with self.subTest(agent=agent):
+                toolchain = self.toolchain(agent)
+                content = self.write(agent, agent_toolchain=toolchain, agent_version="1.2.3")
+                self.assertIn(f'source: "{toolchain.resolve()}"', content)
+                self.assertIn(f'target: "{AGENT_TOOLCHAIN_TARGET}"', content)
+                self.assertIn("read_only: true", content)
+                self.assertIn(f'PATH: "{definition.path}"', content)
+                self.assertIn('version: "1.2.3"', content)
 
     def test_n_attempts_is_configurable(self) -> None:
         self.assertIn("n_attempts: 3", self.write(n_attempts=3))
@@ -52,15 +45,19 @@ class HarborJobConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 1"):
             self.write(n_attempts=0)
 
-    def test_shared_toolchain_rejects_non_docker_environment(self) -> None:
+    def test_toolchain_rejects_non_docker_environment(self) -> None:
         with self.assertRaisesRegex(ValueError, "only by local Docker"):
-            self.write(codex_toolchain=self.toolchain(), environment="modal")
+            self.write(agent_toolchain=self.toolchain("codex"), environment="modal")
 
-    def test_shared_toolchain_requires_all_executables(self) -> None:
-        toolchain = self.toolchain()
-        (toolchain / "bin" / "rg").unlink()
-        with self.assertRaisesRegex(FileNotFoundError, "missing"):
-            self.write(codex_toolchain=toolchain)
+    def test_toolchain_rejects_unknown_agent(self) -> None:
+        with self.assertRaisesRegex(ValueError, "supported agent"):
+            self.write("unknown", agent_toolchain=self.root)
+
+    def test_toolchain_requires_agent_executables(self) -> None:
+        toolchain = self.toolchain("claude-code")
+        (toolchain / "bin" / "claude").unlink()
+        with self.assertRaisesRegex(FileNotFoundError, "claude"):
+            self.write("claude-code", agent_toolchain=toolchain)
 
 
 if __name__ == "__main__":

@@ -28,3 +28,4 @@ smoke-code.sh
 smoke-revert.sh
 smoke-process.sh
 smoke-instruction.sh
+smoke-claude-revert.sh

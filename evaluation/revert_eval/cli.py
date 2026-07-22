@@ -57,7 +57,7 @@ def parser() -> argparse.ArgumentParser:
     job.add_argument(
         "--agent",
         required=True,
-        help="Harbor agent name (claude-code and codex are verified defaults)",
+        help="Harbor agent name (codex, claude-code, and kimi-cli support shared toolchains)",
     )
     job.add_argument("--model", required=True)
     job.add_argument("--environment", choices=["docker", "daytona", "modal"], default="docker")
@@ -65,13 +65,13 @@ def parser() -> argparse.ArgumentParser:
     job.add_argument("--concurrency", type=int, default=1)
     job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
     job.add_argument(
-        "--codex-toolchain",
+        "--agent-toolchain",
         type=Path,
-        help="Bind-mount a prepared shared Codex toolchain into every local-Docker task",
+        help="Bind-mount a prepared shared agent toolchain into every local-Docker task",
     )
     job.add_argument(
-        "--codex-version",
-        help="Require this Codex CLI version (for example 0.144.6)",
+        "--agent-version",
+        help="Require this agent CLI version",
     )
 
     monitor = sub.add_parser(
@@ -127,8 +127,8 @@ def main() -> None:
                 concurrency=args.concurrency,
                 n_attempts=args.n_attempts,
                 jobs_dir=args.jobs_dir,
-                codex_toolchain=args.codex_toolchain,
-                codex_version=args.codex_version,
+                agent_toolchain=args.agent_toolchain,
+                agent_version=args.agent_version,
             )
         )
 

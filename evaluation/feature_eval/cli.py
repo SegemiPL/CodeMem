@@ -46,6 +46,8 @@ def parser() -> argparse.ArgumentParser:
     job.add_argument("--n-attempts", type=int, default=1)
     job.add_argument("--concurrency", type=int, default=1)
     job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
+    job.add_argument("--agent-toolchain", type=Path, help="Shared toolchain for codex, claude-code, or kimi-cli")
+    job.add_argument("--agent-version", help="Require the installed agent CLI version")
     return result
 
 
@@ -62,6 +64,8 @@ def main() -> None:
                 concurrency=args.concurrency,
                 n_attempts=args.n_attempts,
                 jobs_dir=args.jobs_dir,
+                agent_toolchain=args.agent_toolchain,
+                agent_version=args.agent_version,
                 record_trajectory=True,
             )
         )

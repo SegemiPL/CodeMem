@@ -256,6 +256,12 @@ def _is_compaction_event(event: dict[str, Any]) -> bool:
 def agent_session_roots() -> list[tuple[str, Path]]:
     """Return resumable session stores for the supported Harbor agents."""
     return [
+        # Harbor sets CLAUDE_CONFIG_DIR=/logs/agent/sessions for claude-code;
+        # its session JSONLs live under the projects/ subdirectory. List it
+        # first and scope it to projects/ so claude-code evidence is labeled
+        # correctly instead of being picked up incidentally under the codex
+        # root (which shares the same parent directory).
+        ("claude-code", Path("/logs/agent/sessions/projects")),
         ("codex", Path("/logs/agent/sessions")),
         ("kimi-cli", Path("/logs/agent/kimi/share")),
     ]
@@ -264,10 +270,16 @@ def agent_session_roots() -> list[tuple[str, Path]]:
 def detect_compaction(sessions: Path | None = None) -> dict[str, Any]:
     roots = [("session", sessions)] if sessions else agent_session_roots()
     evidence: list[str] = []
+    # Roots may nest (claude-code's projects/ lives inside codex's root);
+    # scan each file once so events are not double-counted.
+    seen: set[Path] = set()
     for agent, root in roots:
         if not root.exists():
             continue
         for path in root.rglob("*.jsonl"):
+            if path in seen:
+                continue
+            seen.add(path)
             for line in path.read_text(errors="replace").splitlines():
                 try:
                     event = json.loads(line)
@@ -407,7 +419,8 @@ def main(phase: str) -> None:
 
         # Compaction may also happen during the revert step itself; scan the
         # live session again so the metrics show both checkpoints.
-        details["session_at_revert"] = detect_compaction()
+        session_at_revert = detect_compaction()
+        details["session_at_revert"] = session_at_revert
 
         # Get the current results of the target test
         target_result = test_instance(target, current)
@@ -424,8 +437,12 @@ def main(phase: str) -> None:
                 target["touched_files"], "target-revert",
             ),
 
-            # whether the session has been compact
-            "session_compacted_before_final": session["session_compacted_before_final"],
+            # whether the session has been compacted at any point up to and
+            # including the revert step (pre-final checkpoint OR live scan)
+            "session_compacted_before_final": (
+                session["session_compacted_before_final"]
+                or session_at_revert["session_compacted_before_final"]
+            ),
 
             # whether we manually require the session to be compacted
             "manual_compaction_requested": config["manual_compaction_requested"],
@@ -444,6 +461,11 @@ def main(phase: str) -> None:
         session = pre_final_session()
         details["session"] = session
 
+        # Compaction may also have happened since the pre-final checkpoint
+        # (during revert or the restore step itself); rescan the live session.
+        session_at_restore = detect_compaction()
+        details["session_at_restore"] = session_at_restore
+
         # Test the result
         target_result = test_instance(target, current)
 
@@ -459,8 +481,12 @@ def main(phase: str) -> None:
                 target["touched_files"], "target-restore",
             ),
 
-            # whether the session has been compacted
-            "session_compacted_before_final": session["session_compacted_before_final"],
+            # whether the session has been compacted at any point up to the
+            # end of the trial (pre-final checkpoint OR live scan)
+            "session_compacted_before_final": (
+                session["session_compacted_before_final"]
+                or session_at_restore["session_compacted_before_final"]
+            ),
 
             # whether we manually require the session to be compacted
             "manual_compaction_requested": config["manual_compaction_requested"],
