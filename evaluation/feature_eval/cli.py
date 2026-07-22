@@ -43,6 +43,7 @@ def parser() -> argparse.ArgumentParser:
     job.add_argument(
         "--environment", choices=["docker", "daytona", "modal"], default="docker"
     )
+    job.add_argument("--n-attempts", type=int, default=1)
     job.add_argument("--concurrency", type=int, default=1)
     job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
     return result
@@ -59,6 +60,7 @@ def main() -> None:
                 model=args.model,
                 environment=args.environment,
                 concurrency=args.concurrency,
+                n_attempts=args.n_attempts,
                 jobs_dir=args.jobs_dir,
                 record_trajectory=True,
             )

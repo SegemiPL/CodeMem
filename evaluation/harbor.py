@@ -24,8 +24,16 @@ def write_job_config(
     record_trajectory: bool = True,
     codex_toolchain: Path | None = None,
     codex_version: str | None = None,
+    n_attempts: int = 1,
 ) -> Path:
     """Write the Harbor job wrapper shared by CodeMem task adapters."""
+    if n_attempts < 1:
+        raise ValueError("n_attempts must be at least 1")
+
+    # Check for Local Codex Begin
+    # These need to be adapted for other agents
+    # These should be encapsulated  as a function, taking the args of (agent, agent_toolchain, agent_version)
+
     if codex_version is not None and agent != "codex":
         raise ValueError("A pinned Codex version requires agent='codex'")
     if codex_toolchain is not None:
@@ -45,32 +53,47 @@ def write_job_config(
                     f"Shared Codex toolchain is missing {candidate}; "
                     "run scripts/prepare-codex-toolchain.sh first"
                 )
+    
+    # Check For Local Codex End
 
+    # whether to record trajectory
+    # Always leave it as True
     exclude = ""
     if not record_trajectory:
         exclude = (
             '    exclude_logs: ["trajectory.json", "sessions/**", '
             '"kimi/share/sessions/**", "kimi-cli.txt"]\n'
         )
+    
+    # Mounts: Local Agent Toolchain mounted to docker container
     mounts = ""
     agent_env = ""
     agent_kwargs = ""
+
+    # If use local agent toolchain
     if codex_toolchain is not None:
+        # mounts the local agent toolchain
         mounts = f'''  mounts:
     - type: bind
       source: {json.dumps(str(codex_toolchain))}
       target: {json.dumps(CODEX_TOOLCHAIN_TARGET)}
       read_only: true
 '''
+
+        # PATH for agent in docker
         agent_env = f'''    env:
       PATH: {json.dumps(CODEX_TOOLCHAIN_PATH)}
 '''
+
+    # Confirm the version
     if codex_version is not None:
         agent_kwargs = f'''    kwargs:
       version: {json.dumps(codex_version)}
 '''
+
+    # Main Config
     content = f'''jobs_dir: {jobs_dir}
-n_attempts: 1
+n_attempts: {n_attempts}
 n_concurrent_trials: {concurrency}
 environment:
   type: {environment}
@@ -82,6 +105,8 @@ environment:
 {agent_env}{agent_kwargs}{exclude}datasets:
   - path: {tasks_path}
 '''
+
+    # write config yaml
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path

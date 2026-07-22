@@ -30,6 +30,7 @@ class HarborJobConfigTest(unittest.TestCase):
             environment=kwargs.pop("environment", "docker"),
             concurrency=1,
             jobs_dir=self.root / "results",
+            n_attempts=kwargs.pop("n_attempts", 1),
             **kwargs,
         )
         return path.read_text()
@@ -43,6 +44,13 @@ class HarborJobConfigTest(unittest.TestCase):
         self.assertIn("read_only: true", content)
         self.assertIn(f'PATH: "{CODEX_TOOLCHAIN_PATH}"', content)
         self.assertIn('version: "0.144.6"', content)
+
+    def test_n_attempts_is_configurable(self) -> None:
+        self.assertIn("n_attempts: 3", self.write(n_attempts=3))
+
+    def test_n_attempts_must_be_positive(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            self.write(n_attempts=0)
 
     def test_shared_toolchain_rejects_non_docker_environment(self) -> None:
         with self.assertRaisesRegex(ValueError, "only by local Docker"):

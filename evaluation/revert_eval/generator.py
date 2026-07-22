@@ -413,6 +413,7 @@ rm -f -- "$0"
         jobs_dir: Path,
         codex_toolchain: Path | None = None,
         codex_version: str | None = None,
+        n_attempts: int = 1,
     ) -> Path:
         return write_job_config(
             path,
@@ -425,6 +426,7 @@ rm -f -- "$0"
             record_trajectory=self.config.execution.record_trajectory,
             codex_toolchain=codex_toolchain,
             codex_version=codex_version,
+            n_attempts=n_attempts,
         )
 
 
