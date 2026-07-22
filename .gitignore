@@ -19,3 +19,12 @@ evaluation/results/
 
 # Jobs
 jobs/
+
+# Shared local agent toolchains
+.cache/
+
+# Smoke Test Script:
+smoke-code.sh
+smoke-revert.sh
+smoke-process.sh
+smoke-instruction.sh

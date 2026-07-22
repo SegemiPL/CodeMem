@@ -8,6 +8,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from evaluation.harbor import write_job_config
+
 from .config import RevertEvalConfig
 
 
@@ -78,12 +80,28 @@ class RevertTaskGenerator:
         self._records = self._build_record_index()
 
     def _build_record_index(self) -> dict[str, Instance]:
-        raw = json.loads(self.dataset_path.read_text())["tasks"]["Revert"]
         records: dict[str, Instance] = {}
-        for pair in raw:
-            for record in [pair.get("target"), *(pair.get("middle") or [])]:
-                if record:
-                    records[record["instance_id"]] = Instance.from_record(record)
+        if self.dataset_path.suffix == ".parquet":
+            try:
+                import pyarrow.parquet as pq
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Reading the canonical SWE-Gym dataset requires pyarrow; "
+                    "install it or pass the legacy code_mem_dataset.json via --dataset"
+                ) from exc
+            for record in pq.read_table(self.dataset_path).to_pylist():
+                records[record["instance_id"]] = Instance.from_record(record)
+        elif self.dataset_path.suffix == ".json":
+            raw = json.loads(self.dataset_path.read_text())["tasks"]["Revert"]
+            for pair in raw:
+                for record in [pair.get("target"), *(pair.get("middle") or [])]:
+                    if record:
+                        records[record["instance_id"]] = Instance.from_record(record)
+        else:
+            raise ValueError(
+                f"Unsupported SWE-Gym dataset format: {self.dataset_path} "
+                "(expected .parquet or .json)"
+            )
         return records
 
     def candidates(
@@ -230,9 +248,17 @@ class RevertTaskGenerator:
         evaluator_source = Path(__file__).with_name("runtime_evaluator.py").read_text()
         (task_dir / "tests" / "evaluate.py").write_text(evaluator_source)
 
-        # toml
+        # whole task toml (all the instances) 
+        # like metadata, per step resource restriction 
         self._write_task_toml(task_dir, steps, target, middles)
+
+        # for target and middles, write instructions
+        # per instance specific instruction
         self._write_instructions(task_dir, target, middles)
+
+        # for targets, create set up scripts!!!
+        # Important: Currently we need to create setup scripts for middle as well(checkout middle base commit and clean files)
+        # Middle setup scripts have not been completed yet
         self._write_setup_scripts(task_dir, target)
         for step in steps:
             script = task_dir / "steps" / step / "tests" / "test.sh"
@@ -385,32 +411,21 @@ rm -f -- "$0"
         environment: str,
         concurrency: int,
         jobs_dir: Path,
+        codex_toolchain: Path | None = None,
+        codex_version: str | None = None,
     ) -> Path:
-        exclude = ""
-        if not self.config.execution.record_trajectory:
-            # Scoped to the agent log dir: drop native sessions, the ATIF
-            # trajectory, and the kimi-cli wire log, but keep small text
-            # artifacts such as verifier stdout.
-            exclude = (
-                '    exclude_logs: ["trajectory.json", "sessions/**", '
-                '"kimi/share/sessions/**", "kimi-cli.txt"]\n'
-            )
-        content = f'''jobs_dir: {jobs_dir}
-n_attempts: 1
-n_concurrent_trials: {concurrency}
-environment:
-  type: {environment}
-  delete: true
-agents:
-  - name: {agent}
-    model_name: {model}
-    resume_trajectory: true
-{exclude}datasets:
-  - path: {tasks_path}
-'''
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
-        return path
+        return write_job_config(
+            path,
+            tasks_path=tasks_path,
+            agent=agent,
+            model=model,
+            environment=environment,
+            concurrency=concurrency,
+            jobs_dir=jobs_dir,
+            record_trajectory=self.config.execution.record_trajectory,
+            codex_toolchain=codex_toolchain,
+            codex_version=codex_version,
+        )
 
 
 def _shell_quote(value: str) -> str:

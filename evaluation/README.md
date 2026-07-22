@@ -1,6 +1,8 @@
 # Harbor revert evaluation
 
-This directory turns pairs from `data/ordered_revert_candidates.json` into
+This directory turns chains from
+`../data/data/revert/ordered_revert_candidates.json` and the canonical
+SWE-Gym parquet into
 Harbor multi-step tasks. It reuses Harbor for agent installation, native session
 resume, Docker/Daytona/Modal environments, concurrency, log collection, and
 per-step verification. The custom code is limited to dataset conversion,
@@ -33,25 +35,54 @@ metrics are still produced.
 
 ## Generate and run
 
-From the CodeMem repository:
+From the CodeMem repository (using the workspace virtual environment):
 
 ```bash
-python3 -m evaluation.revert_eval.cli generate \
+/data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli generate \
   --target Project-MONAI__MONAI-1010
 
-python3 -m evaluation.revert_eval.cli job-config \
+/data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli job-config \
   --agent codex \
   --model openai/gpt-5.3-codex \
   --environment docker \
   --concurrency 1
 ```
 
+### Shared Codex toolchain for local Docker
+
+Harbor normally installs Codex, Node.js, and ripgrep inside every fresh task
+container. For large local-Docker jobs, prepare one versioned host toolchain
+and bind-mount it read-only into every task instead:
+
+```bash
+scripts/prepare-codex-toolchain.sh \
+  --codex-version 0.144.6 \
+  --output /data/zhuyiqi/CodeMem/.cache/codex-toolchain
+
+/data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli job-config \
+  --agent codex \
+  --model openai/gpt-5.3-codex \
+  --environment docker \
+  --codex-toolchain /data/zhuyiqi/CodeMem/.cache/codex-toolchain \
+  --codex-version 0.144.6 \
+  --concurrency 1
+```
+
+The preparation script downloads the toolchain once, verifies the Node.js
+archive checksum, and stages updates before replacing an existing toolchain.
+The generated Harbor job mounts it at `/opt/codemem-agent` and adds its `bin`
+directories to the agent `PATH`. Harbor's Codex adapter then detects the
+existing executable and skips per-container apt, NVM, and npm installation.
+Use an explicit Codex version for reproducible benchmark runs; `latest` is
+convenient only for initial smoke testing. The mount is local-Docker specific
+and is rejected for Daytona or Modal jobs.
+
 Then run the generated configuration with the Harbor checkout requested for the
 experiment (the exact launcher depends on how Harbor is installed):
 
 ```bash
-cd ~/code/harbor
-harbor jobs start -c ~/code/CodeMem/evaluation/generated/revert-job.yaml
+/data/zhangpeilin/miniconda3/envs/CodeMem/bin/harbor run \
+  -c evaluation/generated/revert-job.yaml
 ```
 
 Use `--environment daytona` or `--environment modal` and raise `--concurrency`
@@ -134,3 +165,52 @@ available. Keep branch execution within one multi-step trial for now. A useful
 upstream Harbor addition would be a provider-neutral checkpoint hook plus an
 agent `fork_session(checkpoint)` API; that would make the same design work across
 jobs and for providers with native environment snapshots.
+
+## Code/process feature rollouts
+
+`evaluation.feature_eval` converts the private code-feature and process-feature
+construction records into Harbor 1.3 multi-step tasks. Each task runs its 20
+development turns while resuming the same native agent session. Code-feature
+keeps one shared working tree. Process-feature resets and cleans the repository
+to each turn's own `base_commit`, so code edits do not carry between turns while
+the conversation does.
+
+Harbor 0.20 cannot switch the main environment image between steps. Process
+tasks therefore run all turns in the turn-1 SWE-efficiency image and record each
+turn's expected `image_name` as provenance in `tests/config.json` and verifier
+metrics. This is an intentional approximation of the source collection's
+fresh-image policy; checkout, rebuild, or workload failures caused by dependency
+drift should be treated as environment ineligibility rather than agent failure.
+
+Generate all 160 tasks on THUMT:
+
+```bash
+python3 -m evaluation.feature_eval.cli generate
+```
+
+The server defaults are:
+
+- code data: `/data/zhuyiqi/CodeMem/data/code_feature`
+- process data: `/data/zhuyiqi/CodeMem/data/process_feature`
+- output: `evaluation/generated/feature-tasks`
+
+Use `--family code` or `--family process`, repeat `--task-id`/`--subtype` to
+filter, and pass `--overwrite` to regenerate existing output. Global path
+options must appear before the `generate` subcommand.
+
+Create the Harbor job wrapper after generation:
+
+```bash
+python3 -m evaluation.feature_eval.cli job-config \
+  --agent codex \
+  --model openai/gpt-5.3-codex \
+  --environment docker \
+  --concurrency 1
+```
+
+The per-turn verifier currently does not score memory quality. It records a
+cumulative binary workspace patch, Git status, and completion metadata. Harbor
+trajectory retention remains enabled because process-feature evaluation will
+later derive its oracle from the evaluated agent's own tool trace. Full source
+task JSON, memory questions, response grading, and private oracle fields are
+not copied into the agent container.

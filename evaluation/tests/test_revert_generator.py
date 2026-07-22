@@ -14,6 +14,9 @@ from evaluation.revert_eval import runtime_evaluator
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = ROOT.parent / "data" / "data"
+ORDERED = DATA_ROOT / "revert/ordered_revert_candidates.json"
+DATASET = DATA_ROOT / "swegym/raw/train-00000-of-00001.parquet"
 
 
 class RevertTaskGeneratorTest(unittest.TestCase):
@@ -22,8 +25,8 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.output = Path(self.temp.name) / "tasks"
         self.generator = RevertTaskGenerator(
-            ROOT / "data/ordered_revert_candidates.json",
-            ROOT / "data/code_mem_dataset.json",
+            ORDERED,
+            DATASET,
             self.output,
             load_config(ROOT / "evaluation/revert_eval/config.toml"),
         )
@@ -94,8 +97,8 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         from dataclasses import replace
 
         generator = RevertTaskGenerator(
-            ROOT / "data/ordered_revert_candidates.json",
-            ROOT / "data/code_mem_dataset.json",
+            ORDERED,
+            DATASET,
             self.output,
             replace(
                 self.generator.config,

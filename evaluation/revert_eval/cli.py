@@ -4,13 +4,23 @@ import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = ROOT.parent / "data" / "data"
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Generate Harbor CodeMem revert evaluations")
     result.add_argument("--config", type=Path, default=Path(__file__).with_name("config.toml"))
-    result.add_argument("--ordered", type=Path, default=ROOT / "data/ordered_revert_candidates.json")
-    result.add_argument("--dataset", type=Path, default=ROOT / "data/code_mem_dataset.json")
+    result.add_argument(
+        "--ordered",
+        type=Path,
+        default=DATA_ROOT / "revert/ordered_revert_candidates.json",
+    )
+    result.add_argument(
+        "--dataset",
+        type=Path,
+        default=DATA_ROOT / "swegym/raw/train-00000-of-00001.parquet",
+        help="SWE-Gym parquet or legacy code_mem_dataset.json",
+    )
     result.add_argument("--output", type=Path, default=ROOT / "evaluation/generated/revert-tasks")
     sub = result.add_subparsers(dest="command", required=True)
 
@@ -53,6 +63,15 @@ def parser() -> argparse.ArgumentParser:
     job.add_argument("--environment", choices=["docker", "daytona", "modal"], default="docker")
     job.add_argument("--concurrency", type=int, default=1)
     job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
+    job.add_argument(
+        "--codex-toolchain",
+        type=Path,
+        help="Bind-mount a prepared shared Codex toolchain into every local-Docker task",
+    )
+    job.add_argument(
+        "--codex-version",
+        help="Require this Codex CLI version (for example 0.144.6)",
+    )
 
     monitor = sub.add_parser(
         "monitor", help="Print one-line progress lines for a running Harbor job"
@@ -106,6 +125,8 @@ def main() -> None:
                 environment=args.environment,
                 concurrency=args.concurrency,
                 jobs_dir=args.jobs_dir,
+                codex_toolchain=args.codex_toolchain,
+                codex_version=args.codex_version,
             )
         )
 
