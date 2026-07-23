@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+from evaluation.common.naming import safe_name, swegym_image
+
+__all__ = [
+    "CODE_FAMILY",
+    "PROCESS_FAMILY",
+    "FAMILIES",
+    "FeatureTurn",
+    "FeatureTask",
+    "safe_name",
+    "swegym_image",
+    "load_task",
+    "discover_tasks",
+    "select_tasks",
+]
 
 
 CODE_FAMILY = "code"
@@ -36,14 +50,6 @@ class FeatureTask:
     start_base_commit: str
     turns: tuple[FeatureTurn, ...]
     source_path: Path
-
-
-def safe_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9_.-]+", "-", value.lower()).strip("-")
-
-
-def swegym_image(instance_id: str) -> str:
-    return "xingyaoww/sweb.eval.x86_64." + instance_id.replace("__", "_s_").lower()
 
 
 def _required(record: dict[str, Any], key: str, source: Path) -> str:

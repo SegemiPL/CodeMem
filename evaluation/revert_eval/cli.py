@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from evaluation.common.cli import add_job_config_subcommand, run_job_config
 from evaluation.repo_images import DEFAULT_REPO_IMAGE_MAP, load_repo_image_map
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,32 +56,10 @@ def parser() -> argparse.ArgumentParser:
         "overriding execution.manual_compact_before_final",
     )
 
-    job = sub.add_parser("job-config", help="Write a Harbor job YAML")
-    job.add_argument("--path", type=Path, default=ROOT / "evaluation/generated/revert-job.yaml")
-    job.add_argument(
-        "--tasks",
-        type=Path,
-        default=None,
-        help="Dataset directory for the job; defaults to --output",
-    )
-    job.add_argument(
-        "--agent",
-        required=True,
-        help="Harbor agent name (codex, claude-code, and kimi-cli support shared toolchains)",
-    )
-    job.add_argument("--model", required=True)
-    job.add_argument("--environment", choices=["docker", "daytona", "modal"], default="docker")
-    job.add_argument("--n-attempts", type=int, default=1)
-    job.add_argument("--concurrency", type=int, default=1)
-    job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
-    job.add_argument(
-        "--agent-toolchain",
-        type=Path,
-        help="Bind-mount a prepared shared agent toolchain into every local-Docker task",
-    )
-    job.add_argument(
-        "--agent-version",
-        help="Require this agent CLI version",
+    add_job_config_subcommand(
+        sub,
+        default_path=ROOT / "evaluation/generated/revert-job.yaml",
+        default_jobs_dir=ROOT / "evaluation/results",
     )
 
     monitor = sub.add_parser(
@@ -102,6 +81,10 @@ def main() -> None:
         monitor_run(args.job_dir, interval=args.interval, once=args.once)
         return
 
+    if args.command == "job-config":
+        print(run_job_config(args, default_tasks=args.output))
+        return
+
     # Imported lazily so the monitor subcommand also works on interpreters
     # without tomllib (Python < 3.11).
     from dataclasses import replace
@@ -110,7 +93,7 @@ def main() -> None:
     from .generator import RevertTaskGenerator
 
     config = load_config(args.config)
-    if args.command == "generate" and args.manual_compact:
+    if args.manual_compact:
         config = replace(
             config,
             execution=replace(config.execution, manual_compact_before_final=True),
@@ -122,30 +105,14 @@ def main() -> None:
         config,
         repo_image_map=load_repo_image_map(args.repo_image_map),
     )
-    if args.command == "generate":
-        print(
-            generator.generate(
-                args.target,
-                args.middles,
-                args.middle_count,
-                overwrite=args.overwrite,
-            )
+    print(
+        generator.generate(
+            args.target,
+            args.middles,
+            args.middle_count,
+            overwrite=args.overwrite,
         )
-    else:
-        print(
-            generator.write_job_config(
-                args.path,
-                tasks_path=args.tasks or args.output,
-                agent=args.agent,
-                model=args.model,
-                environment=args.environment,
-                concurrency=args.concurrency,
-                n_attempts=args.n_attempts,
-                jobs_dir=args.jobs_dir,
-                agent_toolchain=args.agent_toolchain,
-                agent_version=args.agent_version,
-            )
-        )
+    )
 
 
 if __name__ == "__main__":

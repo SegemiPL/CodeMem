@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from evaluation.harbor import write_job_config
+from evaluation.common.cli import add_job_config_subcommand, run_job_config
 from evaluation.repo_images import DEFAULT_REPO_IMAGE_MAP, load_repo_image_map
 
 from .generator import FeatureTaskGenerator
@@ -41,42 +41,18 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument("--subtype", action="append", dest="subtypes")
     generate.add_argument("--overwrite", action="store_true")
 
-    job = sub.add_parser("job-config", help="Write a Harbor job YAML")
-    job.add_argument(
-        "--path", type=Path, default=ROOT / "evaluation/generated/feature-job.yaml"
+    add_job_config_subcommand(
+        sub,
+        default_path=ROOT / "evaluation/generated/feature-job.yaml",
+        default_jobs_dir=ROOT / "evaluation/results",
     )
-    job.add_argument("--tasks", type=Path, default=None)
-    job.add_argument("--agent", required=True)
-    job.add_argument("--model", required=True)
-    job.add_argument(
-        "--environment", choices=["docker", "daytona", "modal"], default="docker"
-    )
-    job.add_argument("--n-attempts", type=int, default=1)
-    job.add_argument("--concurrency", type=int, default=1)
-    job.add_argument("--jobs-dir", type=Path, default=ROOT / "evaluation/results")
-    job.add_argument("--agent-toolchain", type=Path, help="Shared toolchain for codex, claude-code, or kimi-cli")
-    job.add_argument("--agent-version", help="Require the installed agent CLI version")
     return result
 
 
 def main() -> None:
     args = parser().parse_args()
     if args.command == "job-config":
-        print(
-            write_job_config(
-                args.path,
-                tasks_path=args.tasks or args.output,
-                agent=args.agent,
-                model=args.model,
-                environment=args.environment,
-                concurrency=args.concurrency,
-                n_attempts=args.n_attempts,
-                jobs_dir=args.jobs_dir,
-                agent_toolchain=args.agent_toolchain,
-                agent_version=args.agent_version,
-                record_trajectory=True,
-            )
-        )
+        print(run_job_config(args, default_tasks=args.output))
         return
 
     # Select Tasks

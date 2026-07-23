@@ -6,19 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from evaluation.common.prompts import wrap_solve_instruction
+from evaluation.common.scaffold import (
+    bundle_runtime_script,
+    render_task_toml,
+    write_dockerfile,
+    write_step_dirs,
+    write_step_test_script,
+)
+from evaluation.common.snippets import checkout_lines, setup_script
+
 from .models import CODE_FAMILY, PROCESS_FAMILY, FeatureTask, FeatureTurn, safe_name
-
-# Code-family source instructions are bare problem statements; wrap them with
-# the same solve directive used by the revert tasks (revert_eval/config.toml).
-CODE_INSTRUCTION_TEMPLATE = """
-Solve the following issue in the repository. Work carefully, run relevant tests, and leave the implementation in the working tree.
-
-You must solve this issue by editing files inside the repository directly. Do not use external tools such as curl, wget, a browser, or any API to fetch patches, hints, or solutions.
-
-Instance: {instance_id}
-
-{instruction}
-"""
 
 
 @dataclass(frozen=True)
@@ -48,14 +46,10 @@ class FeatureTaskGenerator:
         (task_dir / "environment").mkdir(parents=True)
         (task_dir / "tests").mkdir()
         step_names = [f"turn_{turn.index:02d}" for turn in task.turns]
-        for name in step_names:
-            (task_dir / "steps" / name / "tests").mkdir(parents=True)
+        write_step_dirs(task_dir, step_names)
 
-        (task_dir / "environment" / "Dockerfile").write_text(
-            f"FROM {task.image}\nWORKDIR /testbed\n"
-            "RUN git config --system --add safe.directory /testbed"
-            " && mkdir -p /logs /tmp/codemem-feature\n"
-        )
+        write_dockerfile(task_dir, task.image, "/tmp/codemem-feature")
+
         safe_config = {
             "task_id": task.task_id,
             "family": task.family,
@@ -83,8 +77,9 @@ class FeatureTaskGenerator:
         (task_dir / "tests" / "config.json").write_text(
             json.dumps(safe_config, indent=2) + "\n"
         )
-        recorder = Path(__file__).with_name("runtime_recorder.py").read_text()
-        (task_dir / "tests" / "record.py").write_text(recorder)
+        bundle_runtime_script(
+            task_dir, Path(__file__).with_name("runtime_recorder.py"), "record.py"
+        )
 
         self._write_task_toml(task_dir, task, step_names)
         for turn, name in zip(task.turns, step_names):
@@ -95,21 +90,13 @@ class FeatureTaskGenerator:
                 # Code instructions are bare problem statements; wrap them in
                 # the solve directive (process instructions are already
                 # agent-facing).
-                instruction = (
-                    CODE_INSTRUCTION_TEMPLATE.format(
-                        instance_id=turn.source_instance_id or task.task_id,
-                        instruction=instruction.strip(),
-                    ).strip()
-                    + "\n"
+                instruction = wrap_solve_instruction(
+                    instruction, turn.source_instance_id or task.task_id
                 )
             (step / "instruction.md").write_text(instruction)
 
             # Per-Step scripts are all in /tests/record.py in docker, using args to pass state
-            test = step / "tests" / "test.sh"
-            test.write_text(
-                "#!/bin/bash\nset -u\npython3 /tests/record.py " + name + "\n"
-            )
-            test.chmod(0o755)
+            write_step_test_script(step, "record.py", name)
 
             # Every turn starts from its own base commit (checkout + clean).
             self._write_turn_setup(step, turn)
@@ -121,15 +108,12 @@ class FeatureTaskGenerator:
         workdir.mkdir()
         setup = workdir / "setup.sh"
         setup.write_text(
-            "#!/bin/bash\n"
-            "set -euo pipefail\n"
-            "cd /testbed\n"
-            f"git reset --hard {turn.base_commit}\n"
-            "git clean -fdx\n"
-            "mkdir -p /tmp/codemem-feature\n"
-            f"printf '%s\\n' {json.dumps(turn.base_commit)} > "
-            "/tmp/codemem-feature/current_commit\n"
-            "rm -f -- \"$0\"\n"
+            setup_script(
+                *checkout_lines(turn.base_commit, clean_args="-fdx"),
+                "mkdir -p /tmp/codemem-feature",
+                f"printf '%s\\n' {json.dumps(turn.base_commit)} > "
+                "/tmp/codemem-feature/current_commit",
+            )
         )
         setup.chmod(0o755)
 
@@ -147,39 +131,25 @@ class FeatureTaskGenerator:
             if task.family == CODE_FAMILY
             else execution.process_agent_timeout_sec
         )
-        step_blocks = "\n".join(
-            f'''[[steps]]
-name = {json.dumps(name)}
-[steps.agent]
-timeout_sec = {timeout}
-[steps.verifier]
-timeout_sec = {execution.verifier_timeout_sec}
-environment_mode = "shared"
-'''
-            for name in step_names
+        content = render_task_toml(
+            task_name=task_dir.name,
+            description="CodeMem 20-turn feature rollout",
+            metadata={
+                "benchmark": "CodeMem-Feature",
+                "family": task.family,
+                "subtype": task.subtype,
+                "source_status": task.status,
+                "source_task_id": task.task_id,
+                "repository": task.repository,
+                "turn_count": 20,
+            },
+            steps=[
+                (name, timeout, execution.verifier_timeout_sec)
+                for name in step_names
+            ],
+            build_timeout_sec=execution.build_timeout_sec,
+            cpus=execution.cpus,
+            memory_mb=execution.memory_mb,
+            storage_mb=execution.storage_mb,
         )
-        content = f'''schema_version = "1.3"
-multi_step_reward_strategy = "final"
-
-[task]
-name = {json.dumps("codemem/" + task_dir.name)}
-description = "CodeMem 20-turn feature rollout"
-
-[metadata]
-benchmark = "CodeMem-Feature"
-family = {json.dumps(task.family)}
-subtype = {json.dumps(task.subtype)}
-source_status = {json.dumps(task.status)}
-source_task_id = {json.dumps(task.task_id)}
-repository = {json.dumps(task.repository)}
-turn_count = 20
-
-[environment]
-build_timeout_sec = {execution.build_timeout_sec}
-cpus = {execution.cpus}
-memory_mb = {execution.memory_mb}
-storage_mb = {execution.storage_mb}
-workdir = "/testbed"
-
-{step_blocks}'''
         (task_dir / "task.toml").write_text(content)

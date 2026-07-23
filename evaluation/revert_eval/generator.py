@@ -8,6 +8,20 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from evaluation.common.naming import safe_name, shell_quote, swegym_image
+from evaluation.common.scaffold import (
+    bundle_runtime_script,
+    render_task_toml,
+    write_dockerfile,
+    write_step_dirs,
+    write_step_test_script,
+)
+from evaluation.common.snippets import (
+    SESSION_RESTORE_LINES,
+    checkout_lines,
+    setup_script,
+    snapshot_restore_lines,
+)
 from evaluation.harbor import write_job_config
 
 from .config import RevertEvalConfig
@@ -49,10 +63,6 @@ class Instance:
             pass_to_pass=tuple(record.get("PASS_TO_PASS") or ()),
             touched_files=touched,
         )
-
-
-def _safe_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9_.-]+", "-", value.lower()).strip("-")
 
 
 def _format_prompt(template: str, instance: Instance, **extra: str) -> str:
@@ -200,7 +210,7 @@ class RevertTaskGenerator:
                 "|".join(middle.instance_id for middle in middles).encode()
             ).hexdigest()[:8]
             suffix += f"--{len(middles)}-middles-{digest}"
-        task_dir = self.output_root / _safe_name(f"{target.instance_id}--{suffix}")
+        task_dir = self.output_root / safe_name(f"{target.instance_id}--{suffix}")
         if task_dir.exists():
             if not overwrite:
                 raise FileExistsError(f"Task already exists: {task_dir}")
@@ -215,27 +225,14 @@ class RevertTaskGenerator:
         steps = ["solve_target", *middle_steps]
         if self.config.execution.manual_compact_before_final:
             steps.append("compact")
-        steps.extend(["revert_target", "restore_target"]) 
-        for step in steps:
-            (task_dir / "steps" / step / "tests").mkdir(parents=True)
+        steps.extend(["revert_target", "restore_target"])
+        write_step_dirs(task_dir, steps)
 
         # Basic image: canonical per-repo image when a map is provided; the
         # task's solve_target setup.sh checks out this instance's base commit.
-        image = self.repo_image_map.get(
-            target.repo,
-            "xingyaoww/sweb.eval.x86_64."
-            + target.instance_id.replace("__", "_s_").lower(),
-        )
+        image = self.repo_image_map.get(target.repo, swegym_image(target.instance_id))
 
-        # Env File
-        # safe.directory: on providers where the exec user differs from the
-        # image's /testbed owner (e.g. Modal gVisor), git refuses to operate
-        # without it. System-level config covers agent and verifier users.
-        (task_dir / "environment" / "Dockerfile").write_text(
-            f"FROM {image}\nWORKDIR /testbed\n"
-            "RUN git config --system --add safe.directory /testbed"
-            " && mkdir -p /logs /tmp/codemem\n"
-        )
+        write_dockerfile(task_dir, image, "/tmp/codemem")
 
         # Metadata
         metadata = {
@@ -250,11 +247,12 @@ class RevertTaskGenerator:
         )
 
         # Evaluator src
-        evaluator_source = Path(__file__).with_name("runtime_evaluator.py").read_text()
-        (task_dir / "tests" / "evaluate.py").write_text(evaluator_source)
+        bundle_runtime_script(
+            task_dir, Path(__file__).with_name("runtime_evaluator.py"), "evaluate.py"
+        )
 
-        # whole task toml (all the instances) 
-        # like metadata, per step resource restriction 
+        # whole task toml (all the instances)
+        # like metadata, per step resource restriction
         self._write_task_toml(task_dir, steps, target, middles)
 
         # for target and middles, write instructions
@@ -266,11 +264,7 @@ class RevertTaskGenerator:
         # commit and cleans the working tree before the agent starts.
         self._write_setup_scripts(task_dir, target, middles)
         for step in steps:
-            script = task_dir / "steps" / step / "tests" / "test.sh"
-            script.write_text(
-                "#!/bin/bash\nset -u\npython3 /tests/evaluate.py " + step + "\n"
-            )
-            script.chmod(0o755)
+            write_step_test_script(task_dir / "steps" / step, "evaluate.py", step)
         return task_dir
 
     @staticmethod
@@ -293,43 +287,23 @@ class RevertTaskGenerator:
         middles: tuple[Instance, ...],
     ) -> None:
         e = self.config.execution
-        # Steps
-        step_blocks = "\n".join(
-            f'''[[steps]]
-name = "{name}"
-[steps.agent]
-timeout_sec = {e.agent_timeout_sec}
-[steps.verifier]
-timeout_sec = {e.verifier_timeout_sec}
-environment_mode = "shared"
-'''
-            for name in steps
+        content = render_task_toml(
+            task_name=task_dir.name,
+            description="Checkpointed target revert and deleted-file restoration evaluation",
+            metadata={
+                "benchmark": "CodeMem-Revert",
+                "target_instance_id": target.instance_id,
+                "middle_instance_ids": [middle.instance_id for middle in middles],
+                "middle_count": len(middles),
+            },
+            steps=[
+                (name, e.agent_timeout_sec, e.verifier_timeout_sec) for name in steps
+            ],
+            build_timeout_sec=e.build_timeout_sec,
+            cpus=e.cpus,
+            memory_mb=e.memory_mb,
+            storage_mb=e.storage_mb,
         )
-
-        # Main content
-        content = f'''schema_version = "1.3"
-multi_step_reward_strategy = "final"
-
-[task]
-name = "codemem/{task_dir.name}"
-description = "Checkpointed target revert and deleted-file restoration evaluation"
-
-[metadata]
-benchmark = "CodeMem-Revert"
-target_instance_id = "{target.instance_id}"
-middle_instance_ids = {json.dumps([middle.instance_id for middle in middles])}
-middle_count = {len(middles)}
-
-[environment]
-build_timeout_sec = {e.build_timeout_sec}
-cpus = {e.cpus}
-memory_mb = {e.memory_mb}
-storage_mb = {e.storage_mb}
-workdir = "/testbed"
-
-{step_blocks}'''
-
-        # Write the toml
         (task_dir / "task.toml").write_text(content)
 
     def _write_instructions(
@@ -363,92 +337,54 @@ workdir = "/testbed"
     def _write_setup_scripts(
         self, task_dir: Path, target: Instance, middles: tuple[Instance, ...]
     ) -> None:
-        first_workdir = task_dir / "steps" / "solve_target" / "workdir"
-        first_workdir.mkdir()
-        first = first_workdir / "setup.sh"
-        first.write_text(
-            f'''#!/bin/bash
-set -euo pipefail
-cd /testbed
-git reset --hard {target.base_commit}
-git clean -fd
-mkdir -p /tmp/codemem
-git rev-parse '{target.base_commit}^{{tree}}' > /tmp/codemem/baseline.tree
-rm -f -- "$0"
-'''
+        def write(step: str, content: str) -> None:
+            workdir = task_dir / "steps" / step / "workdir"
+            workdir.mkdir()
+            script = workdir / "setup.sh"
+            script.write_text(content)
+            script.chmod(0o755)
+
+        write(
+            "solve_target",
+            setup_script(
+                *checkout_lines(target.base_commit),
+                "mkdir -p /tmp/codemem",
+                f"git rev-parse '{target.base_commit}^{{tree}}' > /tmp/codemem/baseline.tree",
+            ),
         )
-        first.chmod(0o755)
 
         # Every middle step starts from its own base commit.
         for index, middle in enumerate(middles, start=1):
-            middle_workdir = (
-                task_dir / "steps" / f"solve_middle_{index:02d}" / "workdir"
+            write(
+                f"solve_middle_{index:02d}",
+                setup_script(*checkout_lines(middle.base_commit)),
             )
-            middle_workdir.mkdir()
-            setup = middle_workdir / "setup.sh"
-            setup.write_text(
-                f'''#!/bin/bash
-set -euo pipefail
-cd /testbed
-git reset --hard {middle.base_commit}
-git clean -fd
-rm -f -- "$0"
-'''
-            )
-            setup.chmod(0o755)
 
         # Revert starts from the recorded post-target snapshot (target base
         # + the agent's own target solution) rather than whatever the last
         # middle step left in the working tree.
-        revert_workdir = task_dir / "steps" / "revert_target" / "workdir"
-        revert_workdir.mkdir()
-        revert = revert_workdir / "setup.sh"
-        revert.write_text(
-            '''#!/bin/bash
-set -euo pipefail
-cd /testbed
-test -s /tmp/codemem/after_target.tree
-git clean -fd
-git read-tree --reset -u "$(cat /tmp/codemem/after_target.tree)"
-git reset --mixed HEAD
-rm -f -- "$0"
-'''
+        write(
+            "revert_target",
+            setup_script(
+                "test -s /tmp/codemem/after_target.tree",
+                *snapshot_restore_lines("/tmp/codemem/after_target.tree"),
+            ),
         )
-        revert.chmod(0o755)
 
-        restore_workdir = task_dir / "steps" / "restore_target" / "workdir"
-        restore_workdir.mkdir()
-        restore = restore_workdir / "setup.sh"
-        quoted_files = " ".join(_shell_quote(path) for path in target.touched_files)
-        restore.write_text(
-            f'''#!/bin/bash
-set -euo pipefail
-cd /testbed
-test -s /tmp/codemem/after_target.tree
-test -d /tmp/codemem/session_checkpoint
-git clean -fd
-git read-tree --reset -u "$(cat /tmp/codemem/after_target.tree)"
-git reset --mixed HEAD
-if test -d /tmp/codemem/session_checkpoint/codex; then
-    rm -rf /logs/agent/sessions
-    mkdir -p /logs/agent
-    cp -a /tmp/codemem/session_checkpoint/codex /logs/agent/sessions
-fi
-if test -d /tmp/codemem/session_checkpoint/claude-code; then
-    mkdir -p /logs/agent/sessions
-    rm -rf /logs/agent/sessions/projects
-    cp -a /tmp/codemem/session_checkpoint/claude-code /logs/agent/sessions/projects
-fi
-if test -d /tmp/codemem/session_checkpoint/kimi-cli; then
-    rm -rf /logs/agent/kimi/share
-    mkdir -p /logs/agent/kimi
-    cp -a /tmp/codemem/session_checkpoint/kimi-cli /logs/agent/kimi/share
-fi
-rm -f -- {quoted_files}
-rm -f -- "$0"
-'''
+        # Restore starts from the same snapshot, with the agent session
+        # rolled back to the post-middle checkpoint and the target's touched
+        # files deleted for the agent to recreate from memory.
+        quoted_files = " ".join(shell_quote(path) for path in target.touched_files)
+        write(
+            "restore_target",
+            setup_script(
+                "test -s /tmp/codemem/after_target.tree",
+                "test -d /tmp/codemem/session_checkpoint",
+                *snapshot_restore_lines("/tmp/codemem/after_target.tree"),
+                *SESSION_RESTORE_LINES,
+                f"rm -f -- {quoted_files}",
+            ),
         )
-        restore.chmod(0o755)
 
     def write_job_config(
         self,
@@ -477,7 +413,3 @@ rm -f -- "$0"
             agent_version=agent_version,
             n_attempts=n_attempts,
         )
-
-
-def _shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
