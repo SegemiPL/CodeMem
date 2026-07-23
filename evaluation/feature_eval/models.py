@@ -53,11 +53,16 @@ def _required(record: dict[str, Any], key: str, source: Path) -> str:
     return value
 
 
-def load_task(path: Path, family: str) -> FeatureTask:
+def load_task(
+    path: Path,
+    family: str,
+    repo_image_map: dict[str, str] | None = None,
+) -> FeatureTask:
     if family not in FAMILIES:
         raise ValueError(f"Unknown feature family: {family}")
     raw = json.loads(path.read_text())
     task_id = _required(raw, "task_id", path)
+    repository = _required(raw, "repository", path)
     raw_turns = raw.get("turns")
     if not isinstance(raw_turns, list) or len(raw_turns) != 20:
         count = len(raw_turns) if isinstance(raw_turns, list) else "missing"
@@ -72,11 +77,15 @@ def load_task(path: Path, family: str) -> FeatureTask:
     if raw_turns[0].get("base_commit") != start:
         raise ValueError(f"{path}: start_base_commit must match turn 1 base_commit")
 
+    repo_image_map = repo_image_map or {}
     if family == CODE_FAMILY:
         first_instance = _required(raw_turns[0], "source_instance_id", path)
-        image = swegym_image(first_instance)
+        # Canonical per-repo image; turn 1's setup.sh checks out the base commit.
+        image = repo_image_map.get(repository, swegym_image(first_instance))
     else:
-        image = _required(raw_turns[0], "image_name", path)
+        image = repo_image_map.get(
+            repository, _required(raw_turns[0], "image_name", path)
+        )
         if any(
             turn.get("workspace_policy") != "fresh_snapshot"
             or turn.get("inherits_previous_working_tree") is not False
@@ -126,7 +135,7 @@ def load_task(path: Path, family: str) -> FeatureTask:
         task_id=task_id,
         subtype=_required(raw, "subtype", path),
         status=_required(raw, "status", path),
-        repository=_required(raw, "repository", path),
+        repository=repository,
         image=image,
         start_base_commit=start,
         turns=tuple(turns),
@@ -134,11 +143,15 @@ def load_task(path: Path, family: str) -> FeatureTask:
     )
 
 
-def discover_tasks(root: Path, family: str) -> list[FeatureTask]:
+def discover_tasks(
+    root: Path,
+    family: str,
+    repo_image_map: dict[str, str] | None = None,
+) -> list[FeatureTask]:
     paths = sorted(root.glob("*/tasks/*/task.json"))
     if not paths:
         raise FileNotFoundError(f"No feature task JSON files found under {root}")
-    tasks = [load_task(path, family) for path in paths]
+    tasks = [load_task(path, family, repo_image_map) for path in paths]
     counts: dict[str, int] = {}
     for task in tasks:
         counts[task.task_id] = counts.get(task.task_id, 0) + 1

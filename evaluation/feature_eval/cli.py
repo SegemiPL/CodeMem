@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from evaluation.harbor import write_job_config
+from evaluation.repo_images import DEFAULT_REPO_IMAGE_MAP, load_repo_image_map
 
 from .generator import FeatureTaskGenerator
 from .models import CODE_FAMILY, PROCESS_FAMILY, discover_tasks, select_tasks
@@ -24,6 +25,13 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--output", type=Path, default=ROOT / "evaluation/generated/feature-tasks"
+    )
+    result.add_argument(
+        "--repo-image-map",
+        type=Path,
+        default=DEFAULT_REPO_IMAGE_MAP,
+        help="Canonical repo -> image mapping JSON; tasks of the same repo "
+        "share one image and check out their own base commit",
     )
     sub = result.add_subparsers(dest="command", required=True)
 
@@ -72,11 +80,12 @@ def main() -> None:
         return
 
     # Select Tasks
+    repo_image_map = load_repo_image_map(args.repo_image_map)
     tasks = []
     if args.family in ("all", CODE_FAMILY):
-        tasks.extend(discover_tasks(args.code_root, CODE_FAMILY))
+        tasks.extend(discover_tasks(args.code_root, CODE_FAMILY, repo_image_map))
     if args.family in ("all", PROCESS_FAMILY):
-        tasks.extend(discover_tasks(args.process_root, PROCESS_FAMILY))
+        tasks.extend(discover_tasks(args.process_root, PROCESS_FAMILY, repo_image_map))
     tasks = select_tasks(
         tasks,
         task_ids=set(args.task_ids or ()),

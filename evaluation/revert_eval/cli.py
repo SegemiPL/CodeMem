@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from evaluation.repo_images import DEFAULT_REPO_IMAGE_MAP, load_repo_image_map
+
 ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = ROOT.parent / "data" / "data"
 
@@ -22,6 +24,13 @@ def parser() -> argparse.ArgumentParser:
         help="SWE-Gym parquet or legacy code_mem_dataset.json",
     )
     result.add_argument("--output", type=Path, default=ROOT / "evaluation/generated/revert-tasks")
+    result.add_argument(
+        "--repo-image-map",
+        type=Path,
+        default=DEFAULT_REPO_IMAGE_MAP,
+        help="Canonical repo -> image mapping JSON; tasks of the same repo "
+        "share one image and check out their own base commit",
+    )
     sub = result.add_subparsers(dest="command", required=True)
 
     generate = sub.add_parser("generate", help="Generate one checkpointed Harbor task")
@@ -106,7 +115,13 @@ def main() -> None:
             config,
             execution=replace(config.execution, manual_compact_before_final=True),
         )
-    generator = RevertTaskGenerator(args.ordered, args.dataset, args.output, config)
+    generator = RevertTaskGenerator(
+        args.ordered,
+        args.dataset,
+        args.output,
+        config,
+        repo_image_map=load_repo_image_map(args.repo_image_map),
+    )
     if args.command == "generate":
         print(
             generator.generate(

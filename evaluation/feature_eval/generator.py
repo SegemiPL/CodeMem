@@ -8,6 +8,18 @@ from typing import Iterable
 
 from .models import CODE_FAMILY, PROCESS_FAMILY, FeatureTask, FeatureTurn, safe_name
 
+# Code-family source instructions are bare problem statements; wrap them with
+# the same solve directive used by the revert tasks (revert_eval/config.toml).
+CODE_INSTRUCTION_TEMPLATE = """
+Solve the following issue in the repository. Work carefully, run relevant tests, and leave the implementation in the working tree.
+
+You must solve this issue by editing files inside the repository directly. Do not use external tools such as curl, wget, a browser, or any API to fetch patches, hints, or solutions.
+
+Instance: {instance_id}
+
+{instruction}
+"""
+
 
 @dataclass(frozen=True)
 class FeatureExecution:
@@ -78,8 +90,19 @@ class FeatureTaskGenerator:
         for turn, name in zip(task.turns, step_names):
             step = task_dir / "steps" / name
 
-            # Instructions can be wrapped by prompt, remain to do.
-            (step / "instruction.md").write_text(turn.instruction)
+            instruction = turn.instruction
+            if task.family == CODE_FAMILY:
+                # Code instructions are bare problem statements; wrap them in
+                # the solve directive (process instructions are already
+                # agent-facing).
+                instruction = (
+                    CODE_INSTRUCTION_TEMPLATE.format(
+                        instance_id=turn.source_instance_id or task.task_id,
+                        instruction=instruction.strip(),
+                    ).strip()
+                    + "\n"
+                )
+            (step / "instruction.md").write_text(instruction)
 
             # Per-Step scripts are all in /tests/record.py in docker, using args to pass state
             test = step / "tests" / "test.sh"
@@ -88,9 +111,8 @@ class FeatureTaskGenerator:
             )
             test.chmod(0o755)
 
-            # If the task is PROCESS_FEATURE: checkout base commit for each turn by setup.sh
-            if task.family == PROCESS_FAMILY or turn.index == 1:
-                self._write_turn_setup(step, turn)
+            # Every turn starts from its own base commit (checkout + clean).
+            self._write_turn_setup(step, turn)
         return task_dir
 
     @staticmethod

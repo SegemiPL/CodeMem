@@ -52,7 +52,7 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         path.write_text(json.dumps(task_record(family)))
         return load_task(path, family)
 
-    def test_code_generates_twenty_shared_steps_and_only_initial_setup(self) -> None:
+    def test_code_generates_twenty_shared_steps_with_per_turn_setup(self) -> None:
         task = self.load(CODE_FAMILY)
         output = FeatureTaskGenerator(self.root / "output").generate(task)
         toml = (output / "task.toml").read_text()
@@ -60,8 +60,17 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         self.assertEqual(toml.count('environment_mode = "shared"'), 20)
         self.assertIn('name = "turn_01"', toml)
         self.assertIn('name = "turn_20"', toml)
+        # Every turn checks out its own base commit before the agent starts.
         self.assertTrue((output / "steps/turn_01/workdir/setup.sh").is_file())
-        self.assertFalse((output / "steps/turn_02/workdir/setup.sh").exists())
+        self.assertTrue((output / "steps/turn_02/workdir/setup.sh").is_file())
+        self.assertTrue((output / "steps/turn_20/workdir/setup.sh").is_file())
+        setup = (output / "steps/turn_02/workdir/setup.sh").read_text()
+        self.assertIn("git reset --hard base-2", setup)
+        # Code instructions are wrapped with the solve directive.
+        instruction = (output / "steps/turn_01/instruction.md").read_text()
+        self.assertIn("Solve the following issue in the repository", instruction)
+        self.assertIn("Instance: owner__repo-1", instruction)
+        self.assertIn("instruction 1", instruction)
         dockerfile = (output / "environment/Dockerfile").read_text()
         self.assertIn("xingyaoww/sweb.eval.x86_64.owner_s_repo-1", dockerfile)
 

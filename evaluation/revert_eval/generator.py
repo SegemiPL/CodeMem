@@ -71,11 +71,14 @@ class RevertTaskGenerator:
         dataset_path: Path,
         output_root: Path,
         config: RevertEvalConfig,
+        repo_image_map: dict[str, str] | None = None,
     ) -> None:
         self.ordered_path = ordered_candidates_path
         self.dataset_path = dataset_path
         self.output_root = output_root
         self.config = config
+        # Canonical per-repo images; tasks check out their own base commit.
+        self.repo_image_map = repo_image_map or {}
         self._ordered = json.loads(self.ordered_path.read_text())["targets"]
         self._records = self._build_record_index()
 
@@ -216,10 +219,12 @@ class RevertTaskGenerator:
         for step in steps:
             (task_dir / "steps" / step / "tests").mkdir(parents=True)
 
-        # Basic image
-        image = (
+        # Basic image: canonical per-repo image when a map is provided; the
+        # task's solve_target setup.sh checks out this instance's base commit.
+        image = self.repo_image_map.get(
+            target.repo,
             "xingyaoww/sweb.eval.x86_64."
-            + target.instance_id.replace("__", "_s_").lower()
+            + target.instance_id.replace("__", "_s_").lower(),
         )
 
         # Env File
@@ -257,9 +262,9 @@ class RevertTaskGenerator:
         self._write_instructions(task_dir, target, middles)
 
         # for targets, create set up scripts!!!
-        # Important: Currently we need to create setup scripts for middle as well(checkout middle base commit and clean files)
-        # Middle setup scripts have not been completed yet
-        self._write_setup_scripts(task_dir, target)
+        # Every solve step (target and each middle) checks out its own base
+        # commit and cleans the working tree before the agent starts.
+        self._write_setup_scripts(task_dir, target, middles)
         for step in steps:
             script = task_dir / "steps" / step / "tests" / "test.sh"
             script.write_text(
@@ -355,7 +360,9 @@ workdir = "/testbed"
             if step_dir.exists():
                 (step_dir / "instruction.md").write_text(instruction)
 
-    def _write_setup_scripts(self, task_dir: Path, target: Instance) -> None:
+    def _write_setup_scripts(
+        self, task_dir: Path, target: Instance, middles: tuple[Instance, ...]
+    ) -> None:
         first_workdir = task_dir / "steps" / "solve_target" / "workdir"
         first_workdir.mkdir()
         first = first_workdir / "setup.sh"
@@ -372,6 +379,43 @@ rm -f -- "$0"
         )
         first.chmod(0o755)
 
+        # Every middle step starts from its own base commit.
+        for index, middle in enumerate(middles, start=1):
+            middle_workdir = (
+                task_dir / "steps" / f"solve_middle_{index:02d}" / "workdir"
+            )
+            middle_workdir.mkdir()
+            setup = middle_workdir / "setup.sh"
+            setup.write_text(
+                f'''#!/bin/bash
+set -euo pipefail
+cd /testbed
+git reset --hard {middle.base_commit}
+git clean -fd
+rm -f -- "$0"
+'''
+            )
+            setup.chmod(0o755)
+
+        # Revert starts from the recorded post-target snapshot (target base
+        # + the agent's own target solution) rather than whatever the last
+        # middle step left in the working tree.
+        revert_workdir = task_dir / "steps" / "revert_target" / "workdir"
+        revert_workdir.mkdir()
+        revert = revert_workdir / "setup.sh"
+        revert.write_text(
+            '''#!/bin/bash
+set -euo pipefail
+cd /testbed
+test -s /tmp/codemem/after_target.tree
+git clean -fd
+git read-tree --reset -u "$(cat /tmp/codemem/after_target.tree)"
+git reset --mixed HEAD
+rm -f -- "$0"
+'''
+        )
+        revert.chmod(0o755)
+
         restore_workdir = task_dir / "steps" / "restore_target" / "workdir"
         restore_workdir.mkdir()
         restore = restore_workdir / "setup.sh"
@@ -380,15 +424,20 @@ rm -f -- "$0"
             f'''#!/bin/bash
 set -euo pipefail
 cd /testbed
-test -s /tmp/codemem/after_middles.tree
+test -s /tmp/codemem/after_target.tree
 test -d /tmp/codemem/session_checkpoint
 git clean -fd
-git read-tree --reset -u "$(cat /tmp/codemem/after_middles.tree)"
+git read-tree --reset -u "$(cat /tmp/codemem/after_target.tree)"
 git reset --mixed HEAD
 if test -d /tmp/codemem/session_checkpoint/codex; then
     rm -rf /logs/agent/sessions
     mkdir -p /logs/agent
     cp -a /tmp/codemem/session_checkpoint/codex /logs/agent/sessions
+fi
+if test -d /tmp/codemem/session_checkpoint/claude-code; then
+    mkdir -p /logs/agent/sessions
+    rm -rf /logs/agent/sessions/projects
+    cp -a /tmp/codemem/session_checkpoint/claude-code /logs/agent/sessions/projects
 fi
 if test -d /tmp/codemem/session_checkpoint/kimi-cli; then
     rm -rf /logs/agent/kimi/share
