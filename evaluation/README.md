@@ -99,6 +99,15 @@ to Harbor's host-side import path so Harbor can load the compatibility adapter
 that skips its otherwise-unconditional Kimi installation. Set `HARBOR_BIN` if
 Harbor is installed somewhere other than the server default.
 
+The same launcher loads CodeMem's Codex memory adapter for every Codex job.
+Harbor's native Codex adapter retains resumable sessions but deletes its
+temporary `CODEX_HOME`; the adapter additionally enables Codex Memories and
+retains only `$CODEX_HOME/memories/` under `/logs/agent/memories/`. It does not
+copy `auth.json`, configuration, caches, or the rest of `CODEX_HOME`. Revert
+tasks include this learned-memory store in the post-middle checkpoint and
+restore it before the restore branch, preventing memory learned while solving
+the revert branch from leaking into the alternate trajectory.
+
 Use `--environment daytona` or `--environment modal` and raise `--concurrency`
 for a parallel provider. Provider credentials and agent credentials are handled
 by Harbor in the usual way.
@@ -143,6 +152,14 @@ Every step stores `metrics.json` with per-test status (`pass`, `fail`, or
 `error`), return code, and bounded output. For Harbor compatibility the verifier
 still writes `reward.json`, but it no longer contains an RL-style `reward`
 field; instead it holds readable per-step metrics.
+
+Every step also captures the complete workspace change as a binary Git patch.
+Inside the live container it is retained at
+`/tmp/codemem/patches/<step-name>.patch`; Harbor additionally archives the same
+content as that step's `verifier/workspace.patch`. The corresponding
+`metrics.json` entry records the semantic base revision, workspace tree hash,
+patch size, SHA-256 digest, and in-container path. Solve steps use their own
+instance base commit, while revert and restore use the target base commit.
 
 - `file_revert_match` / `file_restore_match`: booleans indicating whether the
   target-touched files match the target base tree or saved post-target tree.

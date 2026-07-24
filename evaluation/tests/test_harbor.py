@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from evaluation.harbor import (
+    AGENT_IMPORTS,
     AGENT_TOOLCHAINS,
     AGENT_TOOLCHAIN_TARGET,
     PREINSTALLED_AGENT_IMPORTS,
@@ -45,6 +46,17 @@ class HarborJobConfigTest(unittest.TestCase):
 
     def test_n_attempts_is_configurable(self) -> None:
         self.assertIn("n_attempts: 3", self.write(n_attempts=3))
+
+    def test_codex_always_uses_memory_adapter(self) -> None:
+        self.assertIn(f"name: {AGENT_IMPORTS['codex']}", self.write("codex"))
+        self.assertIn(
+            f"name: {AGENT_IMPORTS['codex']}",
+            self.write(
+                "codex",
+                agent_toolchain=self.toolchain("codex"),
+                agent_version="0.144.6",
+            ),
+        )
 
     def test_shared_kimi_toolchain_uses_preinstalled_adapter(self) -> None:
         content = self.write(

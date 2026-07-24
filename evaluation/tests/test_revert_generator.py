@@ -55,6 +55,7 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         self.assertIn("session_checkpoint", restore_setup)
         self.assertIn("after_middles.tree", restore_setup)
         self.assertIn("session_checkpoint/codex", restore_setup)
+        self.assertIn("session_checkpoint/codex-memories", restore_setup)
         self.assertIn("session_checkpoint/kimi-cli", restore_setup)
         self.assertTrue((task / "tests/evaluate.py").is_file())
         dockerfile = (task / "environment/Dockerfile").read_text()
@@ -220,14 +221,20 @@ class RuntimeEvaluatorTest(unittest.TestCase):
 
         (self.repo / "target.py").write_text("target solved\n")
         runtime_evaluator.main("solve_target")
+        target_patch = self.state / "patches/solve_target.patch"
+        self.assertTrue(target_patch.is_file())
+        self.assertIn("+target solved", target_patch.read_text())
         (self.repo / "middle.py").write_text("middle solved\n")
         runtime_evaluator.main("solve_middle_01")
+        self.assertTrue((self.state / "patches/solve_middle_01.patch").is_file())
         self.assertFalse((self.state / "after_middles.tree").exists())
         (self.repo / "middle2.py").write_text("middle 2 solved\n")
         runtime_evaluator.main("solve_middle_02")
+        self.assertTrue((self.state / "patches/solve_middle_02.patch").is_file())
 
         (self.repo / "target.py").write_text("before\n")
         runtime_evaluator.main("revert_target")
+        self.assertTrue((self.state / "patches/revert_target.patch").is_file())
         metrics = json.loads((self.logs / "reward.json").read_text())
         self.assertTrue(metrics["file_revert_match"])
         self.assertTrue(metrics["session_compacted_before_final"])
@@ -237,8 +244,23 @@ class RuntimeEvaluatorTest(unittest.TestCase):
         (self.repo / "target.py").unlink()
         (self.repo / "target.py").write_text("target solved\n")
         runtime_evaluator.main("restore_target")
+        restore_patch = self.state / "patches/restore_target.patch"
+        self.assertTrue(restore_patch.is_file())
+        self.assertEqual(
+            (self.logs / "workspace.patch").read_text(),
+            restore_patch.read_text(),
+        )
         metrics = json.loads((self.logs / "reward.json").read_text())
         self.assertTrue(metrics["file_restore_match"])
+        details = json.loads((self.logs / "metrics.json").read_text())
+        self.assertEqual(
+            details["workspace_patch"]["container_path"],
+            str(restore_patch),
+        )
+        self.assertEqual(
+            details["workspace_patch"]["workspace_tree"],
+            details["workspace_tree"],
+        )
 
     def test_pytest_uses_the_resolved_test_environment(self) -> None:
         instance = {
@@ -422,6 +444,58 @@ class RuntimeEvaluatorTest(unittest.TestCase):
 
         checkpoint = self.state / "session_checkpoint/kimi-cli/kimi.json"
         self.assertEqual(checkpoint.read_text(), '{"work_dirs": []}')
+
+    def test_checkpoint_session_preserves_codex_learned_memory(self) -> None:
+        root = Path(self.temp.name)
+        codex_marker = root / "agent/codex.txt"
+        codex_marker.parent.mkdir(parents=True, exist_ok=True)
+        codex_marker.write_text("active\n")
+        codex_memories = root / "agent/memories"
+        codex_memories.mkdir()
+        (codex_memories / "MEMORY.md").write_text("remember this\n")
+        original_path = runtime_evaluator.Path
+
+        class RedirectedPath(type(Path())):
+            def __new__(cls, value):
+                redirects = {
+                    "/logs/agent/sessions": root / "missing-codex-sessions",
+                    "/logs/agent/kimi/share": root / "missing-kimi",
+                    "/logs/agent/codex.txt": codex_marker,
+                    "/logs/agent/memories": codex_memories,
+                }
+                return original_path(redirects.get(str(value), value))
+
+        with patch.object(runtime_evaluator, "Path", RedirectedPath):
+            copied = runtime_evaluator.checkpoint_session()
+
+        checkpoint = self.state / "session_checkpoint/codex-memories/MEMORY.md"
+        self.assertIn("codex-memories", copied)
+        self.assertEqual(checkpoint.read_text(), "remember this\n")
+
+    def test_checkpoint_session_preserves_empty_codex_memory_state(self) -> None:
+        root = Path(self.temp.name)
+        codex_marker = root / "agent/codex.txt"
+        codex_marker.parent.mkdir(parents=True, exist_ok=True)
+        codex_marker.write_text("active\n")
+        original_path = runtime_evaluator.Path
+
+        class RedirectedPath(type(Path())):
+            def __new__(cls, value):
+                redirects = {
+                    "/logs/agent/sessions": root / "missing-codex-sessions",
+                    "/logs/agent/kimi/share": root / "missing-kimi",
+                    "/logs/agent/codex.txt": codex_marker,
+                    "/logs/agent/memories": root / "missing-memories",
+                }
+                return original_path(redirects.get(str(value), value))
+
+        with patch.object(runtime_evaluator, "Path", RedirectedPath):
+            copied = runtime_evaluator.checkpoint_session()
+
+        checkpoint = self.state / "session_checkpoint/codex-memories"
+        self.assertIn("codex-memories", copied)
+        self.assertTrue(checkpoint.is_dir())
+        self.assertEqual(list(checkpoint.iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -32,6 +32,13 @@ PREINSTALLED_AGENT_IMPORTS = {
     "kimi-cli": "evaluation.agents.preinstalled_kimi:PreinstalledKimiCli",
 }
 
+# Harbor's Codex adapter deletes its temporary CODEX_HOME after retaining only
+# sessions. Always use a compatibility subclass that also retains memories/
+# without copying auth.json or the rest of CODEX_HOME.
+AGENT_IMPORTS = {
+    "codex": "evaluation.agents.memory_codex:MemoryCodex",
+}
+
 
 def write_job_config(
     path: Path,
@@ -91,7 +98,7 @@ def write_job_config(
     mounts = ""
     agent_env = ""
     agent_kwargs = ""
-    configured_agent = agent
+    configured_agent = AGENT_IMPORTS.get(agent, agent)
 
     # If use local agent toolchain
     if agent_toolchain is not None:
@@ -107,7 +114,7 @@ def write_job_config(
         agent_env = f'''    env:
       PATH: {json.dumps(toolchain_definition.path)}
 '''
-        configured_agent = PREINSTALLED_AGENT_IMPORTS.get(agent, agent)
+        configured_agent = PREINSTALLED_AGENT_IMPORTS.get(agent, configured_agent)
 
     # Confirm the version
     if agent_version is not None:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -42,6 +43,59 @@ def snapshot_tree() -> str:
     tree = run("git", "write-tree").stdout.strip()
     run("git", "reset", "--mixed", "HEAD")
     return tree
+
+
+def patch_base_for_phase(
+    phase: str, target: dict[str, Any], middles: list[dict[str, Any]]
+) -> str:
+    """Return the semantic base used to reconstruct a phase workspace patch."""
+    if phase.startswith("solve_middle_"):
+        middle_index = int(phase.rsplit("_", 1)[1])
+        if 1 <= middle_index <= len(middles):
+            base_commit = middles[middle_index - 1].get("base_commit")
+            if base_commit:
+                return str(base_commit)
+    elif phase == "compact" and middles:
+        base_commit = middles[-1].get("base_commit")
+        if base_commit:
+            return str(base_commit)
+    else:
+        base_commit = target.get("base_commit")
+        if base_commit:
+            return str(base_commit)
+    return run("git", "rev-parse", "HEAD^{tree}").stdout.strip()
+
+
+def save_workspace_patch(phase: str, base: str, current_tree: str) -> dict[str, Any]:
+    """Save a full binary patch both in container state and verifier artifacts."""
+    completed = run(
+        "git",
+        "diff",
+        "--no-ext-diff",
+        "--binary",
+        base,
+        current_tree,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"Could not create workspace patch for {phase} "
+            f"from {base} to {current_tree}:\n{completed.stdout}"
+        )
+
+    patch = completed.stdout
+    state_dir = STATE / "patches"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / f"{phase}.patch"
+    state_path.write_text(patch)
+    (LOGS / "workspace.patch").write_text(patch)
+    return {
+        "base": base,
+        "workspace_tree": current_tree,
+        "container_path": str(state_path),
+        "bytes": len(patch.encode()),
+        "sha256": hashlib.sha256(patch.encode()).hexdigest(),
+    }
 
 
 def resolve_test_python() -> str:
@@ -295,12 +349,12 @@ def detect_compaction(sessions: Path | None = None) -> dict[str, Any]:
 
 
 def checkpoint_session() -> list[str]:
-    """Copy resumable session stores into STATE.
+    """Copy resumable session and learned-memory stores into STATE.
 
-    Returns the labels of the session stores that were copied. An empty
-    result means no supported agent session was found; callers record a
-    warning instead of aborting the step so that earlier-phase metrics
-    still get written (the restore branch will then fail its setup).
+    Returns the labels of the stores that were copied. An empty result means
+    no supported agent state was found; callers record a warning instead of
+    aborting the step so that earlier-phase metrics still get written (the
+    restore branch will then fail its setup).
     """
     destination = STATE / "session_checkpoint"
     if destination.exists():
@@ -312,6 +366,21 @@ def checkpoint_session() -> list[str]:
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination / agent)
         copied.append(agent)
+
+    # Harbor's native Codex adapter checkpoints resumable sessions separately
+    # from Codex's learned-memory store. Preserve the latter as branch state as
+    # well, including an empty directory: if the post-middle checkpoint has no
+    # memories, restoring that empty checkpoint must still discard memories
+    # learned later while solving the revert branch.
+    if Path("/logs/agent/codex.txt").is_file():
+        memory_source = Path("/logs/agent/memories")
+        memory_destination = destination / "codex-memories"
+        destination.mkdir(parents=True, exist_ok=True)
+        if memory_source.exists():
+            shutil.copytree(memory_source, memory_destination)
+        else:
+            memory_destination.mkdir()
+        copied.append("codex-memories")
     return copied
 
 
@@ -338,6 +407,8 @@ def main(phase: str) -> None:
     middles = config["middles"]
     current = snapshot_tree()
     details: dict[str, Any] = {"phase": phase, "workspace_tree": current}
+    patch_base = patch_base_for_phase(phase, target, middles)
+    details["workspace_patch"] = save_workspace_patch(phase, patch_base, current)
     metrics: dict[str, Any] = {}
 
     # After solve target 
