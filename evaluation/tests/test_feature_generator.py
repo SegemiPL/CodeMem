@@ -7,6 +7,7 @@ from pathlib import Path
 
 from evaluation.feature_eval.generator import FeatureTaskGenerator
 from evaluation.feature_eval.models import CODE_FAMILY, PROCESS_FAMILY, load_task
+from evaluation.common.isolation import AGENT_UID, FEATURE_STATE_DIR
 
 
 def task_record(family: str) -> dict:
@@ -73,6 +74,9 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         self.assertIn("instruction 1", instruction)
         dockerfile = (output / "environment/Dockerfile").read_text()
         self.assertIn("xingyaoww/sweb.eval.x86_64.owner_s_repo-1", dockerfile)
+        self.assertIn(f"useradd --uid {AGENT_UID}", dockerfile)
+        self.assertIn(FEATURE_STATE_DIR, dockerfile)
+        self.assertIn("find /tests", setup)
 
     def test_process_uses_agent_facing_instruction_and_first_image(self) -> None:
         task = self.load(PROCESS_FAMILY)

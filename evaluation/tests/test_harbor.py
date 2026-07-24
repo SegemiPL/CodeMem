@@ -11,6 +11,7 @@ from evaluation.harbor import (
     PREINSTALLED_AGENT_IMPORTS,
     write_job_config,
 )
+from evaluation.common.isolation import AGENT_HOME, AGENT_USER
 
 
 class HarborJobConfigTest(unittest.TestCase):
@@ -58,6 +59,17 @@ class HarborJobConfigTest(unittest.TestCase):
             ),
         )
 
+    def test_every_supported_agent_uses_restricted_adapter(self) -> None:
+        for agent, adapter in AGENT_IMPORTS.items():
+            with self.subTest(agent=agent):
+                self.assertIn(f"name: {adapter}", self.write(agent))
+
+    def test_agent_home_is_the_unprivileged_home(self) -> None:
+        content = self.write("claude-code")
+        self.assertIn(f'HOME: "{AGENT_HOME}"', content)
+        self.assertIn(f'USER: "{AGENT_USER}"', content)
+        self.assertIn(f'LOGNAME: "{AGENT_USER}"', content)
+
     def test_shared_kimi_toolchain_uses_preinstalled_adapter(self) -> None:
         content = self.write(
             "kimi-cli",
@@ -69,9 +81,9 @@ class HarborJobConfigTest(unittest.TestCase):
             content,
         )
 
-    def test_kimi_without_toolchain_keeps_builtin_adapter(self) -> None:
+    def test_kimi_without_toolchain_uses_restricted_adapter(self) -> None:
         content = self.write("kimi-cli")
-        self.assertIn("name: kimi-cli", content)
+        self.assertIn(f"name: {AGENT_IMPORTS['kimi-cli']}", content)
         self.assertNotIn(PREINSTALLED_AGENT_IMPORTS["kimi-cli"], content)
 
     def test_n_attempts_must_be_positive(self) -> None:
@@ -83,8 +95,12 @@ class HarborJobConfigTest(unittest.TestCase):
             self.write(agent_toolchain=self.toolchain("codex"), environment="modal")
 
     def test_toolchain_rejects_unknown_agent(self) -> None:
-        with self.assertRaisesRegex(ValueError, "supported agent"):
+        with self.assertRaisesRegex(ValueError, "supported"):
             self.write("unknown", agent_toolchain=self.root)
+
+    def test_unknown_agent_is_rejected_without_toolchain(self) -> None:
+        with self.assertRaisesRegex(ValueError, "restricted agent adapter"):
+            self.write("unknown")
 
     def test_toolchain_requires_agent_executables(self) -> None:
         toolchain = self.toolchain("claude-code")

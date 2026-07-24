@@ -154,12 +154,26 @@ still writes `reward.json`, but it no longer contains an RL-style `reward`
 field; instead it holds readable per-step metrics.
 
 Every step also captures the complete workspace change as a binary Git patch.
-Inside the live container it is retained at
-`/tmp/codemem/patches/<step-name>.patch`; Harbor additionally archives the same
-content as that step's `verifier/workspace.patch`. The corresponding
+It exists only in the step-scoped verifier area and Harbor archives it as that
+step's `verifier/workspace.patch`; the next root setup removes the in-container
+copy before another agent turn starts. The corresponding
 `metrics.json` entry records the semantic base revision, workspace tree hash,
-patch size, SHA-256 digest, and in-container path. Solve steps use their own
+patch size, SHA-256 digest, and artifact path. Solve steps use their own
 instance base commit, while revert and restore use the target base commit.
+
+## In-container isolation
+
+Generated environments create a `codemem-agent` account. Codex, Claude Code,
+and Kimi CLI commands run as that unprivileged user, while Harbor workdir setup
+and verifier commands remain root. Evaluator-only Git history, workspace trees,
+and branch checkpoints live under root-only `/var/lib/codemem-private`.
+
+Before every agent turn, root setup removes the previous `/tests` and
+`/logs/verifier` contents. Revert phases are materialized from the private
+repository and exposed through a new one-commit `/testbed/.git`, so original
+history and verifier-created dangling objects are not readable by the agent.
+The active `/logs/agent` session and memory stores remain agent-readable because
+they are the state being evaluated.
 
 - `file_revert_match` / `file_restore_match`: booleans indicating whether the
   target-touched files match the target base tree or saved post-target tree.

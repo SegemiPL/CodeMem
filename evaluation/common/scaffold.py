@@ -10,6 +10,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from evaluation.common.isolation import (
+    AGENT_GID,
+    AGENT_HOME,
+    AGENT_UID,
+    AGENT_USER,
+    PRIVATE_STATE_ROOT,
+)
+
 
 def write_dockerfile(task_dir: Path, image: str, state_dir: str) -> None:
     """Write environment/Dockerfile based on a runtime image.
@@ -21,8 +29,13 @@ def write_dockerfile(task_dir: Path, image: str, state_dir: str) -> None:
     (task_dir / "environment").mkdir(parents=True, exist_ok=True)
     (task_dir / "environment" / "Dockerfile").write_text(
         f"FROM {image}\nWORKDIR /testbed\n"
+        f"RUN groupadd --gid {AGENT_GID} {AGENT_USER}"
+        f" && useradd --uid {AGENT_UID} --gid {AGENT_GID}"
+        f" --home-dir {AGENT_HOME} --create-home --shell /bin/bash {AGENT_USER}\n"
         "RUN git config --system --add safe.directory /testbed"
-        f" && mkdir -p /logs {state_dir}\n"
+        f" && install -d -m 0755 /logs /logs/agent"
+        f" && install -d -m 0700 -o root -g root {PRIVATE_STATE_ROOT} {state_dir}"
+        f" && chown -R {AGENT_UID}:{AGENT_GID} /logs/agent {AGENT_HOME}\n"
     )
 
 

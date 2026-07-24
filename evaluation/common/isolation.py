@@ -1,0 +1,9 @@
+AGENT_USER = "codemem-agent"
+AGENT_UID = 10001
+AGENT_GID = 10001
+AGENT_HOME = f"/home/{AGENT_USER}"
+
+PRIVATE_STATE_ROOT = "/var/lib/codemem-private"
+REVERT_STATE_DIR = f"{PRIVATE_STATE_ROOT}/revert"
+FEATURE_STATE_DIR = f"{PRIVATE_STATE_ROOT}/feature"
+PRIVATE_GIT_DIR = f"{REVERT_STATE_DIR}/original.git"

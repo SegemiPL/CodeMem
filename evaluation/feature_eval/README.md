@@ -97,7 +97,7 @@ evaluation/generated/feature-tasks/
         └── ...
 ```
 
-Every generated task has 20 steps. The generated `task.toml` controls Harbor timeouts and shared-environment behavior. The Dockerfile selects the runtime image. The turn instruction and setup files are generated from the source turn records.
+Every generated task has 20 steps. The generated `task.toml` controls Harbor timeouts and shared-environment behavior. The Dockerfile selects the runtime image and creates an unprivileged `codemem-agent` account. Agent commands run under that account; root setup clears previous verifier tests/logs before each turn and stores recorder state under root-only `/var/lib/codemem-private`.
 
 Code-feature tasks use the SWE-Gym image derived from the first turn's `source_instance_id`. They create setup only for turn 1 so the workspace can carry changes across turns.
 

@@ -13,7 +13,7 @@ from typing import Any
 REPO = Path("/testbed")
 LOGS = Path("/logs/verifier")
 CONFIG = Path("/tests/config.json")
-STATE = Path("/tmp/codemem-feature")
+STATE = Path("/var/lib/codemem-private/feature")
 
 
 def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

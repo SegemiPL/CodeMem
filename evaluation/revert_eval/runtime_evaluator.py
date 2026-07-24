@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path("/testbed")
-STATE = Path("/tmp/codemem")
+STATE = Path("/var/lib/codemem-private/revert")
 LOGS = Path("/logs/verifier")
 CONFIG = Path("/tests/config.json")
 
@@ -38,10 +38,36 @@ def run(
     return result
 
 
+def git_run(
+    *args: str, check: bool = True, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run Git against the root-only oracle repository and visible worktree."""
+    env = dict(
+        os.environ,
+        GIT_DIR=str(STATE / "original.git"),
+        GIT_WORK_TREE=str(REPO),
+    )
+    result = subprocess.run(
+        ("git", *args),
+        cwd=REPO,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            f"Command failed ({result.returncode}): git {' '.join(args)}\n"
+            f"{result.stdout}"
+        )
+    return result
+
+
 def snapshot_tree() -> str:
-    run("git", "add", "-A")
-    tree = run("git", "write-tree").stdout.strip()
-    run("git", "reset", "--mixed", "HEAD")
+    git_run("add", "-A")
+    tree = git_run("write-tree").stdout.strip()
+    git_run("reset", "--mixed", "HEAD")
     return tree
 
 
@@ -63,13 +89,12 @@ def patch_base_for_phase(
         base_commit = target.get("base_commit")
         if base_commit:
             return str(base_commit)
-    return run("git", "rev-parse", "HEAD^{tree}").stdout.strip()
+    return git_run("rev-parse", "HEAD^{tree}").stdout.strip()
 
 
 def save_workspace_patch(phase: str, base: str, current_tree: str) -> dict[str, Any]:
-    """Save a full binary patch both in container state and verifier artifacts."""
-    completed = run(
-        "git",
+    """Save a full binary patch only in the ephemeral verifier artifact area."""
+    completed = git_run(
         "diff",
         "--no-ext-diff",
         "--binary",
@@ -84,15 +109,12 @@ def save_workspace_patch(phase: str, base: str, current_tree: str) -> dict[str, 
         )
 
     patch = completed.stdout
-    state_dir = STATE / "patches"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_path = state_dir / f"{phase}.patch"
-    state_path.write_text(patch)
-    (LOGS / "workspace.patch").write_text(patch)
+    artifact_path = LOGS / "workspace.patch"
+    artifact_path.write_text(patch)
     return {
         "base": base,
         "workspace_tree": current_tree,
-        "container_path": str(state_path),
+        "artifact_path": str(artifact_path),
         "bytes": len(patch.encode()),
         "sha256": hashlib.sha256(patch.encode()).hexdigest(),
     }
@@ -126,9 +148,9 @@ def resolve_test_python() -> str:
 
 
 def restore_tree(tree: str) -> None:
-    run("git", "clean", "-fd")
-    run("git", "read-tree", "--reset", "-u", tree)
-    run("git", "reset", "--mixed", "HEAD")
+    git_run("clean", "-fd")
+    git_run("read-tree", "--reset", "-u", tree)
+    git_run("reset", "--mixed", "HEAD")
 
 
 def _patch_files(patch: str) -> list[str]:
@@ -153,9 +175,9 @@ def reset_test_files(patch: str, base_commit: str | None) -> None:
     if not base_commit:
         return
     for path in _patch_files(patch):
-        exists = run("git", "cat-file", "-e", f"{base_commit}:{path}", check=False)
+        exists = git_run("cat-file", "-e", f"{base_commit}:{path}", check=False)
         if exists.returncode == 0:
-            run("git", "checkout", base_commit, "--", path)
+            git_run("checkout", base_commit, "--", path)
         else:
             (REPO / path).unlink(missing_ok=True)
 
@@ -175,11 +197,11 @@ def test_instance(instance: dict[str, Any], workspace_tree: str) -> dict[str, An
             patch_path = STATE / f"{instance['instance_id']}.test.patch"
             patch_path.write_text(patch)
             reset_test_files(patch, instance.get("base_commit"))
-            applied = run("git", "apply", "--check", str(patch_path), check=False)
+            applied = git_run("apply", "--check", str(patch_path), check=False)
             if applied.returncode != 0:
                 result["patch_error"] = applied.stdout
                 return result
-            run("git", "apply", str(patch_path))
+            git_run("apply", str(patch_path))
         try:
             test_python = resolve_test_python()
         except RuntimeError as exc:
@@ -271,8 +293,8 @@ def add_middle_metrics(
 
 
 def files_match(reference_tree: str, current_tree: str, files: list[str], name: str) -> bool:
-    completed = run(
-        "git", "diff", "--no-ext-diff", "--binary", reference_tree, current_tree, "--", *files,
+    completed = git_run(
+        "diff", "--no-ext-diff", "--binary", reference_tree, current_tree, "--", *files,
         check=False,
     )
     (LOGS / f"{name}.diff").write_text(completed.stdout)
@@ -401,7 +423,8 @@ def pre_final_session() -> dict[str, Any]:
 
 def main(phase: str) -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
-    STATE.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, mode=0o700, exist_ok=True)
+    STATE.chmod(0o700)
     config = json.loads(CONFIG.read_text())
     target = config["target"]
     middles = config["middles"]
@@ -455,10 +478,9 @@ def main(phase: str) -> None:
                     metrics[f"target_{suffix}_{key}"] = value
             add_middle_metrics(metrics, middle_results)
 
-            # if this is the last middle instance, save it as a checkpoint for restoration.
+            # The last middle records the private session checkpoint used by
+            # both final branches.
             is_checkpoint = middle_index == len(middles)
-            if is_checkpoint:
-                (STATE / "after_middles.tree").write_text(current + "\n")
         
         # After compact
         else:
@@ -504,7 +526,7 @@ def main(phase: str) -> None:
         metrics = {
             # git diff
             "file_revert_match": files_match(
-                (STATE / "baseline.tree").read_text().strip(), current,
+                target["base_commit"], current,
                 target["touched_files"], "target-revert",
             ),
 

@@ -7,6 +7,14 @@ so retries/resumes do not re-apply it.
 
 from __future__ import annotations
 
+from evaluation.common.isolation import (
+    AGENT_GID,
+    AGENT_HOME,
+    AGENT_UID,
+    PRIVATE_GIT_DIR,
+    REVERT_STATE_DIR,
+)
+
 
 def setup_script(*lines: str) -> str:
     """Assemble a one-shot setup.sh from body lines."""
@@ -14,9 +22,13 @@ def setup_script(*lines: str) -> str:
         [
             "#!/bin/bash",
             "set -euo pipefail",
+            'script_path="$0"',
             "cd /testbed",
+            'rm -f -- "$script_path"',
+            "find /tests -mindepth 1 -depth -delete 2>/dev/null || true",
+            "find /logs/verifier -mindepth 1 -depth -delete 2>/dev/null || true",
             *lines,
-            'rm -f -- "$0"',
+            f"chown -R {AGENT_UID}:{AGENT_GID} /testbed /logs/agent {AGENT_HOME}",
             "",
         ]
     )
@@ -31,39 +43,68 @@ def checkout_lines(base_commit: str, *, clean_args: str = "-fd") -> list[str]:
 
 
 def snapshot_restore_lines(tree_file: str) -> list[str]:
-    """Restore the working tree to a recorded `git write-tree` snapshot.
-
-    read-tree does not move HEAD; the follow-up mixed reset turns the
-    snapshot-vs-HEAD difference into ordinary unstaged modifications.
-    """
+    """Restore a root-private tree without exposing the oracle repository."""
     return [
-        "git clean -fd",
+        "rm -rf /testbed/.git",
+        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed git clean -fdx",
+        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed "
         f'git read-tree --reset -u "$(cat {tree_file})"',
-        "git reset --mixed HEAD",
+    ]
+
+
+def fresh_baseline_lines() -> list[str]:
+    """Give the agent a history-free repository for the materialized phase."""
+    return [
+        "git init -q /testbed",
+        "git config user.name CodeMem",
+        "git config user.email codemem@local",
+        "git add -A",
+        "git commit -qm 'CodeMem phase baseline'",
+    ]
+
+
+def private_checkout_lines(base_commit: str) -> list[str]:
+    """Materialize a source commit from the root-only original repository."""
+    return [
+        "rm -rf /testbed/.git",
+        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed "
+        f"git reset --hard {base_commit}",
+        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed git clean -fdx",
+        *fresh_baseline_lines(),
+    ]
+
+
+def initialize_private_repo_lines(base_commit: str) -> list[str]:
+    """Move the image's Git history behind the privilege boundary once."""
+    return [
+        f"install -d -m 0700 -o root -g root {REVERT_STATE_DIR}",
+        f"test ! -e {PRIVATE_GIT_DIR}",
+        f"mv /testbed/.git {PRIVATE_GIT_DIR}",
+        *private_checkout_lines(base_commit),
     ]
 
 
 # Restore the agent session stores checkpointed by the runtime evaluator.
 # Only the branch matching the current run's agent exists on disk.
 SESSION_RESTORE_LINES: list[str] = [
-    "if test -d /tmp/codemem/session_checkpoint/codex; then",
+    f"if test -d {REVERT_STATE_DIR}/session_checkpoint/codex; then",
     "    rm -rf /logs/agent/sessions",
     "    mkdir -p /logs/agent",
-    "    cp -a /tmp/codemem/session_checkpoint/codex /logs/agent/sessions",
+    f"    cp -a {REVERT_STATE_DIR}/session_checkpoint/codex /logs/agent/sessions",
     "fi",
-    "if test -d /tmp/codemem/session_checkpoint/codex-memories; then",
+    f"if test -d {REVERT_STATE_DIR}/session_checkpoint/codex-memories; then",
     "    rm -rf /logs/agent/memories",
     "    mkdir -p /logs/agent",
-    "    cp -a /tmp/codemem/session_checkpoint/codex-memories /logs/agent/memories",
+    f"    cp -a {REVERT_STATE_DIR}/session_checkpoint/codex-memories /logs/agent/memories",
     "fi",
-    "if test -d /tmp/codemem/session_checkpoint/claude-code; then",
+    f"if test -d {REVERT_STATE_DIR}/session_checkpoint/claude-code; then",
     "    mkdir -p /logs/agent/sessions",
     "    rm -rf /logs/agent/sessions/projects",
-    "    cp -a /tmp/codemem/session_checkpoint/claude-code /logs/agent/sessions/projects",
+    f"    cp -a {REVERT_STATE_DIR}/session_checkpoint/claude-code /logs/agent/sessions/projects",
     "fi",
-    "if test -d /tmp/codemem/session_checkpoint/kimi-cli; then",
+    f"if test -d {REVERT_STATE_DIR}/session_checkpoint/kimi-cli; then",
     "    rm -rf /logs/agent/kimi/share",
     "    mkdir -p /logs/agent/kimi",
-    "    cp -a /tmp/codemem/session_checkpoint/kimi-cli /logs/agent/kimi/share",
+    f"    cp -a {REVERT_STATE_DIR}/session_checkpoint/kimi-cli /logs/agent/kimi/share",
     "fi",
 ]

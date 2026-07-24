@@ -18,10 +18,13 @@ from evaluation.common.scaffold import (
 )
 from evaluation.common.snippets import (
     SESSION_RESTORE_LINES,
-    checkout_lines,
+    fresh_baseline_lines,
+    initialize_private_repo_lines,
+    private_checkout_lines,
     setup_script,
     snapshot_restore_lines,
 )
+from evaluation.common.isolation import REVERT_STATE_DIR
 from evaluation.harbor import write_job_config
 
 from .config import RevertEvalConfig
@@ -232,7 +235,7 @@ class RevertTaskGenerator:
         # task's solve_target setup.sh checks out this instance's base commit.
         image = self.repo_image_map.get(target.repo, swegym_image(target.instance_id))
 
-        write_dockerfile(task_dir, image, "/tmp/codemem")
+        write_dockerfile(task_dir, image, REVERT_STATE_DIR)
 
         # Metadata
         metadata = {
@@ -347,9 +350,7 @@ class RevertTaskGenerator:
         write(
             "solve_target",
             setup_script(
-                *checkout_lines(target.base_commit),
-                "mkdir -p /tmp/codemem",
-                f"git rev-parse '{target.base_commit}^{{tree}}' > /tmp/codemem/baseline.tree",
+                *initialize_private_repo_lines(target.base_commit),
             ),
         )
 
@@ -357,8 +358,10 @@ class RevertTaskGenerator:
         for index, middle in enumerate(middles, start=1):
             write(
                 f"solve_middle_{index:02d}",
-                setup_script(*checkout_lines(middle.base_commit)),
+                setup_script(*private_checkout_lines(middle.base_commit)),
             )
+        if self.config.execution.manual_compact_before_final:
+            write("compact", setup_script())
 
         # Revert starts from the recorded post-target snapshot (target base
         # + the agent's own target solution) rather than whatever the last
@@ -366,8 +369,9 @@ class RevertTaskGenerator:
         write(
             "revert_target",
             setup_script(
-                "test -s /tmp/codemem/after_target.tree",
-                *snapshot_restore_lines("/tmp/codemem/after_target.tree"),
+                f"test -s {REVERT_STATE_DIR}/after_target.tree",
+                *snapshot_restore_lines(f"{REVERT_STATE_DIR}/after_target.tree"),
+                *fresh_baseline_lines(),
             ),
         )
 
@@ -378,11 +382,12 @@ class RevertTaskGenerator:
         write(
             "restore_target",
             setup_script(
-                "test -s /tmp/codemem/after_target.tree",
-                "test -d /tmp/codemem/session_checkpoint",
-                *snapshot_restore_lines("/tmp/codemem/after_target.tree"),
+                f"test -s {REVERT_STATE_DIR}/after_target.tree",
+                f"test -d {REVERT_STATE_DIR}/session_checkpoint",
+                *snapshot_restore_lines(f"{REVERT_STATE_DIR}/after_target.tree"),
                 *SESSION_RESTORE_LINES,
                 f"rm -f -- {quoted_files}",
+                *fresh_baseline_lines(),
             ),
         )
 

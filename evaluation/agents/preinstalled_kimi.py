@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 
-from harbor.agents.installed.kimi_cli import KimiCli
 from harbor.environments.base import BaseEnvironment
 
+from evaluation.agents.restricted_kimi import RestrictedKimiCli
 
-class PreinstalledKimiCli(KimiCli):
+
+class PreinstalledKimiCli(RestrictedKimiCli):
     """Reuse a Kimi CLI toolchain already mounted on ``PATH``.
 
     Harbor 0.20's built-in adapter unconditionally installs curl, uv, Python,

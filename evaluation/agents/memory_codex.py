@@ -5,8 +5,10 @@ from typing import Any
 from harbor.agents.installed.codex import Codex
 from harbor.environments.base import BaseEnvironment
 
+from evaluation.agents.restricted import RestrictedAgentMixin
 
-class MemoryCodex(Codex):
+
+class MemoryCodex(RestrictedAgentMixin, Codex):
     """Persist Codex's learned-memory store across Harbor steps.
 
     Harbor 0.20 runs Codex with ``CODEX_HOME=/tmp/codex-home``, copies only

@@ -15,6 +15,7 @@ from evaluation.common.scaffold import (
     write_step_test_script,
 )
 from evaluation.common.snippets import checkout_lines, setup_script
+from evaluation.common.isolation import FEATURE_STATE_DIR
 
 from .models import CODE_FAMILY, PROCESS_FAMILY, FeatureTask, FeatureTurn, safe_name
 
@@ -48,7 +49,7 @@ class FeatureTaskGenerator:
         step_names = [f"turn_{turn.index:02d}" for turn in task.turns]
         write_step_dirs(task_dir, step_names)
 
-        write_dockerfile(task_dir, task.image, "/tmp/codemem-feature")
+        write_dockerfile(task_dir, task.image, FEATURE_STATE_DIR)
 
         safe_config = {
             "task_id": task.task_id,
@@ -110,9 +111,9 @@ class FeatureTaskGenerator:
         setup.write_text(
             setup_script(
                 *checkout_lines(turn.base_commit, clean_args="-fdx"),
-                "mkdir -p /tmp/codemem-feature",
+                f"mkdir -p {FEATURE_STATE_DIR}",
                 f"printf '%s\\n' {json.dumps(turn.base_commit)} > "
-                "/tmp/codemem-feature/current_commit",
+                f"{FEATURE_STATE_DIR}/current_commit",
             )
         )
         setup.chmod(0o755)

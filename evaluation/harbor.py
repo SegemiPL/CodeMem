@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from evaluation.common.isolation import AGENT_HOME, AGENT_USER
+
 
 AGENT_TOOLCHAIN_TARGET = "/opt/codemem-agent"
 _SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -37,6 +39,8 @@ PREINSTALLED_AGENT_IMPORTS = {
 # without copying auth.json or the rest of CODEX_HOME.
 AGENT_IMPORTS = {
     "codex": "evaluation.agents.memory_codex:MemoryCodex",
+    "claude-code": "evaluation.agents.restricted_claude:RestrictedClaudeCode",
+    "kimi-cli": "evaluation.agents.restricted_kimi:RestrictedKimiCli",
 }
 
 
@@ -57,6 +61,11 @@ def write_job_config(
     """Write the Harbor job wrapper shared by CodeMem task adapters."""
     if n_attempts < 1:
         raise ValueError("n_attempts must be at least 1")
+    if agent not in AGENT_TOOLCHAINS:
+        raise ValueError(
+            "Artifact-isolated jobs require a restricted agent adapter; "
+            f"supported: {sorted(AGENT_TOOLCHAINS)}"
+        )
 
     # Check for Local Agent Begin
     # Toolchain definitions are registered above for each supported agent.
@@ -96,7 +105,11 @@ def write_job_config(
     
     # Mounts: Local Agent Toolchain mounted to docker container
     mounts = ""
-    agent_env = ""
+    agent_env_values = {
+        "HOME": AGENT_HOME,
+        "USER": AGENT_USER,
+        "LOGNAME": AGENT_USER,
+    }
     agent_kwargs = ""
     configured_agent = AGENT_IMPORTS.get(agent, agent)
 
@@ -111,9 +124,7 @@ def write_job_config(
 '''
 
         # PATH for agent in docker
-        agent_env = f'''    env:
-      PATH: {json.dumps(toolchain_definition.path)}
-'''
+        agent_env_values["PATH"] = toolchain_definition.path
         configured_agent = PREINSTALLED_AGENT_IMPORTS.get(agent, configured_agent)
 
     # Confirm the version
@@ -121,6 +132,11 @@ def write_job_config(
         agent_kwargs = f'''    kwargs:
       version: {json.dumps(agent_version)}
 '''
+
+    agent_env = "    env:\n" + "".join(
+        f"      {key}: {json.dumps(value)}\n"
+        for key, value in agent_env_values.items()
+    )
 
     # Main Config
     content = f'''jobs_dir: {jobs_dir}

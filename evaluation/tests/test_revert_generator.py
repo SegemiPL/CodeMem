@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,8 @@ from unittest.mock import patch
 from evaluation.revert_eval.config import load_config
 from evaluation.revert_eval.generator import RevertTaskGenerator
 from evaluation.revert_eval import runtime_evaluator
+from evaluation.common.isolation import AGENT_UID, REVERT_STATE_DIR
+from evaluation.harbor import AGENT_IMPORTS
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,13 +56,19 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         self.assertNotIn('name = "compact"', task_toml)
         restore_setup = (task / "steps/restore_target/workdir/setup.sh").read_text()
         self.assertIn("session_checkpoint", restore_setup)
-        self.assertIn("after_middles.tree", restore_setup)
+        self.assertIn(REVERT_STATE_DIR, restore_setup)
         self.assertIn("session_checkpoint/codex", restore_setup)
         self.assertIn("session_checkpoint/codex-memories", restore_setup)
         self.assertIn("session_checkpoint/kimi-cli", restore_setup)
         self.assertTrue((task / "tests/evaluate.py").is_file())
         dockerfile = (task / "environment/Dockerfile").read_text()
         self.assertIn("safe.directory /testbed", dockerfile)
+        self.assertIn(f"useradd --uid {AGENT_UID}", dockerfile)
+        self.assertIn("mode 0700", dockerfile.replace("-m 0700", "mode 0700"))
+        self.assertIn("git init -q /testbed", restore_setup)
+        self.assertIn("git clean -fdx", restore_setup)
+        self.assertIn("find /tests", restore_setup)
+        self.assertNotIn("/tmp/codemem", restore_setup)
 
     def test_generates_configured_number_of_middle_steps(self) -> None:
         task = self.generator.generate(
@@ -138,7 +147,7 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         content = path.read_text()
         self.assertIn("resume_trajectory: true", content)
         self.assertIn("type: modal", content)
-        self.assertIn("name: codex", content)
+        self.assertIn(f"name: {AGENT_IMPORTS['codex']}", content)
 
 
 class RuntimeEvaluatorTest(unittest.TestCase):
@@ -161,11 +170,16 @@ class RuntimeEvaluatorTest(unittest.TestCase):
         (self.repo / "middle2.py").write_text("before\n")
         subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
         subprocess.run(["git", "commit", "-qm", "base"], cwd=self.repo, check=True)
-        baseline = subprocess.run(
-            ["git", "rev-parse", "HEAD^{tree}"], cwd=self.repo, check=True,
+        base_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, check=True,
             text=True, stdout=subprocess.PIPE,
         ).stdout.strip()
-        (self.state / "baseline.tree").write_text(baseline + "\n")
+        shutil.move(self.repo / ".git", self.state / "original.git")
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "visible baseline"], cwd=self.repo, check=True)
         (self.agent_sessions / "session.jsonl").write_text(
             '{"type":"system","subtype":"compact_boundary"}\n'
         )
@@ -173,17 +187,20 @@ class RuntimeEvaluatorTest(unittest.TestCase):
             "target": {
                 "instance_id": "target-1", "test_patch": "",
                 "FAIL_TO_PASS": [], "PASS_TO_PASS": [],
+                "base_commit": base_commit,
                 "touched_files": ["target.py"],
             },
             "middles": [
                 {
                     "instance_id": "middle-1", "test_patch": "",
                     "FAIL_TO_PASS": [], "PASS_TO_PASS": [],
+                    "base_commit": base_commit,
                     "touched_files": ["middle.py"],
                 },
                 {
                     "instance_id": "middle-2", "test_patch": "",
                     "FAIL_TO_PASS": [], "PASS_TO_PASS": [],
+                    "base_commit": base_commit,
                     "touched_files": ["middle2.py"],
                 },
             ],
@@ -221,40 +238,35 @@ class RuntimeEvaluatorTest(unittest.TestCase):
 
         (self.repo / "target.py").write_text("target solved\n")
         runtime_evaluator.main("solve_target")
-        target_patch = self.state / "patches/solve_target.patch"
+        target_patch = self.logs / "workspace.patch"
         self.assertTrue(target_patch.is_file())
         self.assertIn("+target solved", target_patch.read_text())
+        self.assertFalse((self.state / "patches").exists())
         (self.repo / "middle.py").write_text("middle solved\n")
         runtime_evaluator.main("solve_middle_01")
-        self.assertTrue((self.state / "patches/solve_middle_01.patch").is_file())
         self.assertFalse((self.state / "after_middles.tree").exists())
         (self.repo / "middle2.py").write_text("middle 2 solved\n")
         runtime_evaluator.main("solve_middle_02")
-        self.assertTrue((self.state / "patches/solve_middle_02.patch").is_file())
+        self.assertFalse((self.state / "patches").exists())
 
         (self.repo / "target.py").write_text("before\n")
         runtime_evaluator.main("revert_target")
-        self.assertTrue((self.state / "patches/revert_target.patch").is_file())
         metrics = json.loads((self.logs / "reward.json").read_text())
         self.assertTrue(metrics["file_revert_match"])
         self.assertTrue(metrics["session_compacted_before_final"])
 
-        after_middles = (self.state / "after_middles.tree").read_text().strip()
-        runtime_evaluator.restore_tree(after_middles)
+        after_target = (self.state / "after_target.tree").read_text().strip()
+        runtime_evaluator.restore_tree(after_target)
         (self.repo / "target.py").unlink()
         (self.repo / "target.py").write_text("target solved\n")
         runtime_evaluator.main("restore_target")
-        restore_patch = self.state / "patches/restore_target.patch"
+        restore_patch = self.logs / "workspace.patch"
         self.assertTrue(restore_patch.is_file())
-        self.assertEqual(
-            (self.logs / "workspace.patch").read_text(),
-            restore_patch.read_text(),
-        )
         metrics = json.loads((self.logs / "reward.json").read_text())
         self.assertTrue(metrics["file_restore_match"])
         details = json.loads((self.logs / "metrics.json").read_text())
         self.assertEqual(
-            details["workspace_patch"]["container_path"],
+            details["workspace_patch"]["artifact_path"],
             str(restore_patch),
         )
         self.assertEqual(
@@ -320,12 +332,9 @@ class RuntimeEvaluatorTest(unittest.TestCase):
     def test_test_instance_resets_agent_modified_test_files(self) -> None:
         (self.repo / "tests").mkdir()
         (self.repo / "tests" / "test_t.py").write_text("old\n")
-        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
-        subprocess.run(["git", "commit", "-qm", "add test"], cwd=self.repo, check=True)
-        base = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=self.repo, check=True,
-            text=True, stdout=subprocess.PIPE,
-        ).stdout.strip()
+        runtime_evaluator.git_run("add", ".")
+        runtime_evaluator.git_run("commit", "-qm", "add test")
+        base = runtime_evaluator.git_run("rev-parse", "HEAD").stdout.strip()
         patch = (
             "diff --git a/tests/test_t.py b/tests/test_t.py\n"
             "--- a/tests/test_t.py\n"
