@@ -28,11 +28,16 @@ def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedPr
 
 
 def workspace_patch(base_commit: str, turn_name: str) -> tuple[str, str | None]:
-    """Capture tracked and non-ignored untracked files without touching the real index."""
+    """Capture the workspace through the root-private original repository."""
     STATE.mkdir(parents=True, exist_ok=True)
     index = STATE / f"{turn_name}.index"
     index.unlink(missing_ok=True)
-    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    env = dict(
+        os.environ,
+        GIT_DIR=str(STATE / "original.git"),
+        GIT_WORK_TREE=str(REPO),
+        GIT_INDEX_FILE=str(index),
+    )
     try:
         read_tree = run("git", "read-tree", base_commit, env=env)
         if read_tree.returncode != 0:

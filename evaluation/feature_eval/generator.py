@@ -14,8 +14,12 @@ from evaluation.common.scaffold import (
     write_step_dirs,
     write_step_test_script,
 )
-from evaluation.common.snippets import checkout_lines, setup_script
-from evaluation.common.isolation import FEATURE_STATE_DIR
+from evaluation.common.snippets import (
+    initialize_private_repo_lines,
+    private_checkout_lines,
+    setup_script,
+)
+from evaluation.common.isolation import FEATURE_PRIVATE_GIT_DIR, FEATURE_STATE_DIR
 
 from .models import CODE_FAMILY, PROCESS_FAMILY, FeatureTask, FeatureTurn, safe_name
 
@@ -108,10 +112,20 @@ class FeatureTaskGenerator:
         workdir = step / "workdir"
         workdir.mkdir()
         setup = workdir / "setup.sh"
+        if turn.index == 1:
+            repository_setup = initialize_private_repo_lines(
+                turn.base_commit,
+                state_dir=FEATURE_STATE_DIR,
+                private_git_dir=FEATURE_PRIVATE_GIT_DIR,
+            )
+        else:
+            repository_setup = private_checkout_lines(
+                turn.base_commit,
+                private_git_dir=FEATURE_PRIVATE_GIT_DIR,
+            )
         setup.write_text(
             setup_script(
-                *checkout_lines(turn.base_commit, clean_args="-fdx"),
-                f"mkdir -p {FEATURE_STATE_DIR}",
+                *repository_setup,
                 f"printf '%s\\n' {json.dumps(turn.base_commit)} > "
                 f"{FEATURE_STATE_DIR}/current_commit",
             )

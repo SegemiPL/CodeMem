@@ -42,12 +42,14 @@ def checkout_lines(base_commit: str, *, clean_args: str = "-fd") -> list[str]:
     ]
 
 
-def snapshot_restore_lines(tree_file: str) -> list[str]:
+def snapshot_restore_lines(
+    tree_file: str, *, private_git_dir: str = PRIVATE_GIT_DIR
+) -> list[str]:
     """Restore a root-private tree without exposing the oracle repository."""
     return [
         "rm -rf /testbed/.git",
-        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed git clean -fdx",
-        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed "
+        f"GIT_DIR={private_git_dir} GIT_WORK_TREE=/testbed git clean -fdx",
+        f"GIT_DIR={private_git_dir} GIT_WORK_TREE=/testbed "
         f'git read-tree --reset -u "$(cat {tree_file})"',
     ]
 
@@ -63,24 +65,31 @@ def fresh_baseline_lines() -> list[str]:
     ]
 
 
-def private_checkout_lines(base_commit: str) -> list[str]:
+def private_checkout_lines(
+    base_commit: str, *, private_git_dir: str = PRIVATE_GIT_DIR
+) -> list[str]:
     """Materialize a source commit from the root-only original repository."""
     return [
         "rm -rf /testbed/.git",
-        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed "
+        f"GIT_DIR={private_git_dir} GIT_WORK_TREE=/testbed "
         f"git reset --hard {base_commit}",
-        f"GIT_DIR={PRIVATE_GIT_DIR} GIT_WORK_TREE=/testbed git clean -fdx",
+        f"GIT_DIR={private_git_dir} GIT_WORK_TREE=/testbed git clean -fdx",
         *fresh_baseline_lines(),
     ]
 
 
-def initialize_private_repo_lines(base_commit: str) -> list[str]:
+def initialize_private_repo_lines(
+    base_commit: str,
+    *,
+    state_dir: str = REVERT_STATE_DIR,
+    private_git_dir: str = PRIVATE_GIT_DIR,
+) -> list[str]:
     """Move the image's Git history behind the privilege boundary once."""
     return [
-        f"install -d -m 0700 -o root -g root {REVERT_STATE_DIR}",
-        f"test ! -e {PRIVATE_GIT_DIR}",
-        f"mv /testbed/.git {PRIVATE_GIT_DIR}",
-        *private_checkout_lines(base_commit),
+        f"install -d -m 0700 -o root -g root {state_dir}",
+        f"test ! -e {private_git_dir}",
+        f"mv /testbed/.git {private_git_dir}",
+        *private_checkout_lines(base_commit, private_git_dir=private_git_dir),
     ]
 
 

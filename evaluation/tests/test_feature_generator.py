@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from evaluation.feature_eval.generator import FeatureTaskGenerator
 from evaluation.feature_eval.models import CODE_FAMILY, PROCESS_FAMILY, load_task
-from evaluation.common.isolation import AGENT_UID, FEATURE_STATE_DIR
+from evaluation.feature_eval import runtime_recorder
+from evaluation.common.isolation import (
+    AGENT_UID,
+    FEATURE_PRIVATE_GIT_DIR,
+    FEATURE_STATE_DIR,
+)
 
 
 def task_record(family: str) -> dict:
@@ -67,6 +75,17 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         self.assertTrue((output / "steps/turn_20/workdir/setup.sh").is_file())
         setup = (output / "steps/turn_02/workdir/setup.sh").read_text()
         self.assertIn("git reset --hard base-2", setup)
+        self.assertIn(f"GIT_DIR={FEATURE_PRIVATE_GIT_DIR}", setup)
+        self.assertIn("rm -rf /testbed/.git", setup)
+        self.assertIn("git init -q /testbed", setup)
+        first_setup = (
+            output / "steps/turn_01/workdir/setup.sh"
+        ).read_text()
+        self.assertIn(
+            f"mv /testbed/.git {FEATURE_PRIVATE_GIT_DIR}",
+            first_setup,
+        )
+        self.assertIn("git commit -qm 'CodeMem phase baseline'", first_setup)
         # Code instructions are wrapped with the solve directive.
         instruction = (output / "steps/turn_01/instruction.md").read_text()
         self.assertIn("Solve the following issue in the repository", instruction)
@@ -97,6 +116,8 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         setup = (output / "steps/turn_20/workdir/setup.sh").read_text()
         self.assertIn("git reset --hard base-20", setup)
         self.assertIn("git clean -fdx", setup)
+        self.assertIn(f"GIT_DIR={FEATURE_PRIVATE_GIT_DIR}", setup)
+        self.assertIn("git init -q /testbed", setup)
         config = json.loads((output / "tests/config.json").read_text())
         self.assertEqual(config["runtime_image"], "example/process:image-1")
         self.assertEqual(
@@ -139,6 +160,86 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         path.write_text(json.dumps(record))
         with self.assertRaisesRegex(ValueError, "exactly 20 turns"):
             load_task(path, CODE_FAMILY)
+
+
+class FeatureRuntimeRecorderTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.repo = root / "repo"
+        self.state = root / "state"
+        self.repo.mkdir()
+        self.state.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=self.repo,
+            check=True,
+        )
+        (self.repo / "tracked.py").write_text("before\n")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "original base"],
+            cwd=self.repo,
+            check=True,
+        )
+        self.base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        shutil.move(self.repo / ".git", self.state / "original.git")
+
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "codemem@local"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "CodeMem"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "CodeMem phase baseline"],
+            cwd=self.repo,
+            check=True,
+        )
+
+    def test_patch_uses_private_history_not_visible_baseline(self) -> None:
+        (self.repo / "tracked.py").write_text("after\n")
+        (self.repo / "untracked.py").write_text("new\n")
+        with (
+            patch.object(runtime_recorder, "REPO", self.repo),
+            patch.object(runtime_recorder, "STATE", self.state),
+        ):
+            result, error = runtime_recorder.workspace_patch(
+                self.base,
+                "turn_01",
+            )
+
+        self.assertIsNone(error)
+        self.assertIn("+after", result)
+        self.assertIn("untracked.py", result)
+        visible_count = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=self.repo,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        self.assertEqual(visible_count, "1")
+        self.assertFalse((self.state / "turn_01.index").exists())
 
 
 if __name__ == "__main__":

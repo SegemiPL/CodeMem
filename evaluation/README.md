@@ -184,6 +184,11 @@ Before every agent turn, root setup removes the previous `/tests` and
 `/logs/verifier` contents. Revert phases are materialized from the private
 repository and exposed through a new one-commit `/testbed/.git`, so original
 history and verifier-created dangling objects are not readable by the agent.
+Code- and process-feature turns use the same policy: the image's original
+repository is moved to root-private feature state before turn 1, each turn is
+materialized from that repository by root, and the agent receives a new
+one-commit Git repository for the visible phase. The verifier records patches
+with a separate root-private index rather than the agent-visible `.git`.
 The active `/logs/agent` session and memory stores remain agent-readable because
 they are the state being evaluated.
 
@@ -245,7 +250,10 @@ construction records into Harbor 1.3 multi-step tasks. Each task runs its 20
 development turns while resuming the same native agent session. Code-feature
 keeps one shared working tree. Process-feature resets and cleans the repository
 to each turn's own `base_commit`, so code edits do not carry between turns while
-the conversation does.
+the conversation does. In both families, root performs each checkout through
+the hidden original repository and then creates a fresh one-commit visible
+repository; agents cannot inspect source history, prior phase commits, reflogs,
+or private snapshot objects.
 
 Harbor 0.20 cannot switch the main environment image between steps. Process
 tasks therefore run all turns in the turn-1 SWE-efficiency image and record each
