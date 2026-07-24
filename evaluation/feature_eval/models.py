@@ -11,6 +11,9 @@ __all__ = [
     "CODE_FAMILY",
     "PROCESS_FAMILY",
     "FAMILIES",
+    "CLOSED_BOOK",
+    "OPEN_BOOK_FINAL_TREE_ONLY",
+    "ACCESS_MODES",
     "FeatureTurn",
     "FeatureTask",
     "safe_name",
@@ -24,6 +27,9 @@ __all__ = [
 CODE_FAMILY = "code"
 PROCESS_FAMILY = "process"
 FAMILIES = (CODE_FAMILY, PROCESS_FAMILY)
+CLOSED_BOOK = "closed_book"
+OPEN_BOOK_FINAL_TREE_ONLY = "open_book_final_tree_only"
+ACCESS_MODES = (CLOSED_BOOK, OPEN_BOOK_FINAL_TREE_ONLY)
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,8 @@ class FeatureTask:
     repository: str
     image: str
     start_base_commit: str
+    access_mode: str
+    memory_question: str | None
     turns: tuple[FeatureTurn, ...]
     source_path: Path
 
@@ -84,6 +92,19 @@ def load_task(
         raise ValueError(f"{path}: start_base_commit must match turn 1 base_commit")
 
     repo_image_map = repo_image_map or {}
+    access_mode = _required(raw, "access_mode", path)
+    if access_mode not in ACCESS_MODES:
+        raise ValueError(
+            f"{path}: access_mode must be one of {ACCESS_MODES}, got "
+            f"{access_mode!r}"
+        )
+    memory_question: str | None = None
+    if family == CODE_FAMILY:
+        target = raw.get("target")
+        if not isinstance(target, dict):
+            raise ValueError(f"{path}: missing target object")
+        memory_question = _required(target, "memory_question", path)
+
     if family == CODE_FAMILY:
         first_instance = _required(raw_turns[0], "source_instance_id", path)
         # Canonical per-repo image; turn 1's setup.sh checks out the base commit.
@@ -144,6 +165,8 @@ def load_task(
         repository=repository,
         image=image,
         start_base_commit=start,
+        access_mode=access_mode,
+        memory_question=memory_question,
         turns=tuple(turns),
         source_path=path,
     )

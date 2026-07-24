@@ -248,12 +248,18 @@ jobs and for providers with native environment snapshots.
 `evaluation.feature_eval` converts the private code-feature and process-feature
 construction records into Harbor 1.3 multi-step tasks. Each task runs its 20
 development turns while resuming the same native agent session. Code-feature
-keeps one shared working tree. Process-feature resets and cleans the repository
-to each turn's own `base_commit`, so code edits do not carry between turns while
-the conversation does. In both families, root performs each checkout through
-the hidden original repository and then creates a fresh one-commit visible
-repository; agents cannot inspect source history, prior phase commits, reflogs,
-or private snapshot objects.
+adds a final `memory_qa` step from the task's fixed memory question. For
+`closed_book`, root moves the complete final workspace into private state and
+gives the agent an empty `/testbed`; for `open_book_final_tree_only`, root keeps
+the final files but replaces `.git` with a new one-commit baseline. The answer
+is written to `/testbed/codemem_answer.txt` and archived by the verifier.
+
+Code-feature keeps one shared working tree. Process-feature resets and cleans
+the repository to each turn's own `base_commit`, so code edits do not carry
+between turns while the conversation does. In both families, root performs each
+checkout through the hidden original repository and then creates a fresh
+one-commit visible repository; agents cannot inspect source history, prior
+phase commits, reflogs, or private snapshot objects.
 
 Harbor 0.20 cannot switch the main environment image between steps. Process
 tasks therefore run all turns in the turn-1 SWE-efficiency image and record each
@@ -289,8 +295,11 @@ python3 -m evaluation.feature_eval.cli job-config \
 ```
 
 The per-turn verifier currently does not score memory quality. It records a
-cumulative binary workspace patch, Git status, and completion metadata. Harbor
-trajectory retention remains enabled because process-feature evaluation will
-later derive its oracle from the evaluated agent's own tool trace. Full source
-task JSON, memory questions, response grading, and private oracle fields are
-not copied into the agent container.
+cumulative binary workspace patch, Git status, and completion metadata. The
+code-feature QA verifier records the answer and verifies the requested access
+boundary, but structured oracle extraction and semantic answer grading remain
+separate work. Harbor trajectory retention remains enabled because
+process-feature evaluation will later derive its oracle from the evaluated
+agent's own tool trace. Full source task JSON, response grading, and private
+oracle fields are not copied into the agent container; the fixed memory
+question is exposed only as the final QA instruction.
