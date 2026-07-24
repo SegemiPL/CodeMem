@@ -8,6 +8,10 @@ from evaluation.common.isolation import AGENT_HOME, AGENT_USER
 
 
 AGENT_TOOLCHAIN_TARGET = "/opt/codemem-agent"
+NETWORK_TOOLCHAIN_TARGET = "/opt/codemem-network"
+DEFAULT_NETWORK_TOOLCHAIN = (
+    Path(__file__).resolve().parents[2] / ".cache/network-toolchain"
+)
 _SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -55,6 +59,7 @@ def write_job_config(
     jobs_dir: Path,
     record_trajectory: bool = True,
     agent_toolchain: Path | None = None,
+    network_toolchain: Path | None = None,
     agent_version: str | None = None,
     n_attempts: int = 1,
 ) -> Path:
@@ -65,6 +70,10 @@ def write_job_config(
         raise ValueError(
             "Artifact-isolated jobs require a restricted agent adapter; "
             f"supported: {sorted(AGENT_TOOLCHAINS)}"
+        )
+    if environment != "docker":
+        raise ValueError(
+            "Network-isolated CodeMem agents currently require local Docker"
         )
 
     # Check for Local Agent Begin
@@ -104,7 +113,7 @@ def write_job_config(
         )
     
     # Mounts: Local Agent Toolchain mounted to docker container
-    mounts = ""
+    mount_entries: list[tuple[Path, str]] = []
     agent_env_values = {
         "HOME": AGENT_HOME,
         "USER": AGENT_USER,
@@ -116,16 +125,34 @@ def write_job_config(
     # If use local agent toolchain
     if agent_toolchain is not None:
         # mounts the local agent toolchain
-        mounts = f'''  mounts:
-    - type: bind
-      source: {json.dumps(str(agent_toolchain))}
-      target: {json.dumps(AGENT_TOOLCHAIN_TARGET)}
-      read_only: true
-'''
+        mount_entries.append((agent_toolchain, AGENT_TOOLCHAIN_TARGET))
 
         # PATH for agent in docker
         agent_env_values["PATH"] = toolchain_definition.path
         configured_agent = PREINSTALLED_AGENT_IMPORTS.get(agent, configured_agent)
+
+    if environment == "docker":
+        network_toolchain = (
+            network_toolchain or DEFAULT_NETWORK_TOOLCHAIN
+        ).expanduser().resolve()
+        for executable in ("iptables", "ip6tables"):
+            candidate = network_toolchain / "bin" / executable
+            if not candidate.is_file():
+                raise FileNotFoundError(
+                    f"Network isolation toolchain is missing {candidate}; "
+                    "run scripts/prepare-network-toolchain.sh first"
+                )
+        mount_entries.append((network_toolchain, NETWORK_TOOLCHAIN_TARGET))
+
+    mounts = ""
+    if mount_entries:
+        mounts = "  mounts:\n" + "".join(
+            "    - type: bind\n"
+            f"      source: {json.dumps(str(source))}\n"
+            f"      target: {json.dumps(target)}\n"
+            "      read_only: true\n"
+            for source, target in mount_entries
+        )
 
     # Confirm the version
     if agent_version is not None:

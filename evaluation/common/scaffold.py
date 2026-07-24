@@ -37,6 +37,12 @@ def write_dockerfile(task_dir: Path, image: str, state_dir: str) -> None:
         f" && install -d -m 0700 -o root -g root {PRIVATE_STATE_ROOT} {state_dir}"
         f" && chown -R {AGENT_UID}:{AGENT_GID} /logs/agent {AGENT_HOME}\n"
     )
+    (task_dir / "environment" / "docker-compose.yaml").write_text(
+        "services:\n"
+        "  main:\n"
+        "    cap_add:\n"
+        "      - NET_ADMIN\n"
+    )
 
 
 def write_step_dirs(task_dir: Path, step_names: list[str]) -> None:

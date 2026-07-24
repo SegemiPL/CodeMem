@@ -38,6 +38,33 @@ class RestrictedAgentTest(unittest.TestCase):
         self.assertEqual(calls[0][2]["cwd"], "/testbed")
         self.assertEqual(calls[0][2]["timeout_sec"], 9)
 
+    def test_exec_as_agent_injects_relay_environment_only_after_activation(self) -> None:
+        calls = []
+
+        class Dummy(RestrictedAgentMixin):
+            def agent_relay_environment(self):
+                return {
+                    "OPENAI_API_KEY": "dummy",
+                    "OPENAI_BASE_URL": "http://127.0.0.1:18080/v1",
+                }
+
+            async def _exec(self, environment, command, **kwargs):
+                calls.append(kwargs)
+                return "ok"
+
+        dummy = Dummy()
+        asyncio.run(dummy.exec_as_agent("environment", "before", env={"KEEP": "1"}))
+        dummy._network_isolation_active = True
+        asyncio.run(dummy.exec_as_agent("environment", "after", env={"KEEP": "1"}))
+
+        self.assertNotIn("OPENAI_BASE_URL", calls[0]["env"])
+        self.assertEqual(
+            calls[1]["env"]["OPENAI_BASE_URL"],
+            "http://127.0.0.1:18080/v1",
+        )
+        self.assertEqual(calls[1]["env"]["OPENAI_API_KEY"], "dummy")
+        self.assertEqual(calls[1]["env"]["KEEP"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

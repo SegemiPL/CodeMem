@@ -76,6 +76,8 @@ class FeatureTaskGeneratorTest(unittest.TestCase):
         self.assertIn("xingyaoww/sweb.eval.x86_64.owner_s_repo-1", dockerfile)
         self.assertIn(f"useradd --uid {AGENT_UID}", dockerfile)
         self.assertIn(FEATURE_STATE_DIR, dockerfile)
+        compose = (output / "environment/docker-compose.yaml").read_text()
+        self.assertIn("NET_ADMIN", compose)
         self.assertIn("find /tests", setup)
 
     def test_process_uses_agent_facing_instruction_and_first_image(self) -> None:

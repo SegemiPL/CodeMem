@@ -41,6 +41,8 @@ From the CodeMem repository (using the workspace virtual environment):
 /data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli generate \
   --target Project-MONAI__MONAI-1010
 
+scripts/prepare-network-toolchain.sh
+
 /data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli job-config \
   --agent codex \
   --model openai/gpt-5.3-codex \
@@ -86,6 +88,14 @@ agent version for reproducible benchmark runs; `latest` is convenient only for
 initial smoke testing. The mount is local-Docker specific and is rejected for
 Daytona or Modal jobs.
 
+Local-Docker jobs also mount a small shared firewall bundle at
+`/opt/codemem-network`. Prepare it once with
+`scripts/prepare-network-toolchain.sh`; the default output is
+`../.cache/network-toolchain`, shared by every agent and task. This copies the
+host's firewall binaries and required libraries without downloading packages
+inside task images. Pass `--network-toolchain PATH` only when using a
+non-default location.
+
 Then run the generated configuration with the Harbor checkout requested for the
 experiment (the exact launcher depends on how Harbor is installed):
 
@@ -108,9 +118,11 @@ tasks include this learned-memory store in the post-middle checkpoint and
 restore it before the restore branch, preventing memory learned while solving
 the revert branch from leaking into the alternate trajectory.
 
-Use `--environment daytona` or `--environment modal` and raise `--concurrency`
-for a parallel provider. Provider credentials and agent credentials are handled
-by Harbor in the usual way.
+Network-isolated CodeMem jobs currently require `--environment docker`.
+Daytona and Modal job generation is rejected until equivalent inference-relay
+enforcement is wired for those providers. Harbor resolves provider credentials
+on the host, but the restricted adapter gives the agent only a dummy credential;
+the real key remains in a root-owned relay process.
 
 Select a non-default member of the target's longest ordered chain with
 `--middle INSTANCE_ID`. Use `--overwrite` to regenerate a task.
@@ -174,6 +186,21 @@ repository and exposed through a new one-commit `/testbed/.git`, so original
 history and verifier-created dangling objects are not readable by the agent.
 The active `/logs/agent` session and memory stores remain agent-readable because
 they are the state being evaluated.
+
+Before the first agent turn, the restricted adapter starts a root-owned,
+HTTP inference relay on loopback and installs IPv4/IPv6 rules for UID 10001.
+The agent UID can connect only to that local port; it has no route to the model
+gateway or any other external address. The relay is the only process that can
+reach the configured HTTPS gateway. It accepts POSTs only on known inference
+endpoints, enforces the configured model, rejects provider-side web/computer
+tools and remotely fetched image/file inputs, replaces the dummy credential
+with the real root-held key, and cannot act as an HTTP CONNECT or arbitrary
+forwarding proxy. DNS, raw public
+connections, GitHub, package registries, other local ports, and attempts made
+after changing environment variables are blocked. Codex is additionally forced
+to `web_search=disabled`, while Claude Code is launched with `WebSearch` and
+`WebFetch` denied. Generated Docker environments grant `NET_ADMIN` to root, but
+agent commands remain UID 10001 and cannot read relay state or change the rules.
 
 - `file_revert_match` / `file_restore_match`: booleans indicating whether the
   target-touched files match the target base tree or saved post-target tree.

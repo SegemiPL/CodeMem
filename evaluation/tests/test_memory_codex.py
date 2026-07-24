@@ -12,6 +12,14 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(MemoryCodex is None, "Harbor is not installed in this test environment")
 class MemoryCodexTest(unittest.TestCase):
+    def test_web_search_is_forced_off(self) -> None:
+        agent = MemoryCodex(
+            logs_dir="/tmp/codemem-test-memory-codex",
+            model_name="openai/test",
+            web_search="live",
+        )
+        self.assertIn("-c web_search=disabled", agent.build_cli_flags())
+
     def test_setup_enables_and_restores_memories(self) -> None:
         command = 'ln -sf /tmp/auth.json "$CODEX_HOME/auth.json"'
         augmented = MemoryCodex.augment_command(command)

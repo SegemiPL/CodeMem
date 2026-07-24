@@ -41,6 +41,11 @@ def add_job_config_subcommand(
         help="Bind-mount a prepared shared agent toolchain into every local-Docker task",
     )
     job.add_argument("--agent-version", help="Require this agent CLI version")
+    job.add_argument(
+        "--network-toolchain",
+        type=Path,
+        help="Read-only firewall toolchain; defaults to the shared CodeMem cache",
+    )
     return job
 
 
@@ -55,6 +60,7 @@ def run_job_config(args: argparse.Namespace, *, default_tasks: Path) -> Path:
         n_attempts=args.n_attempts,
         jobs_dir=args.jobs_dir,
         agent_toolchain=args.agent_toolchain,
+        network_toolchain=args.network_toolchain,
         agent_version=args.agent_version,
         record_trajectory=True,
     )

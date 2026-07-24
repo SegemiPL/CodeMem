@@ -27,6 +27,16 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.output = Path(self.temp.name) / "tasks"
+        self.network_toolchain = Path(self.temp.name) / "network"
+        (self.network_toolchain / "bin").mkdir(parents=True)
+        for executable in ("iptables", "ip6tables"):
+            (self.network_toolchain / "bin" / executable).touch()
+        network_patcher = patch(
+            "evaluation.harbor.DEFAULT_NETWORK_TOOLCHAIN",
+            self.network_toolchain,
+        )
+        network_patcher.start()
+        self.addCleanup(network_patcher.stop)
         self.generator = RevertTaskGenerator(
             ORDERED,
             DATASET,
@@ -64,6 +74,10 @@ class RevertTaskGeneratorTest(unittest.TestCase):
         dockerfile = (task / "environment/Dockerfile").read_text()
         self.assertIn("safe.directory /testbed", dockerfile)
         self.assertIn(f"useradd --uid {AGENT_UID}", dockerfile)
+        self.assertIn(
+            "NET_ADMIN",
+            (task / "environment/docker-compose.yaml").read_text(),
+        )
         self.assertIn("mode 0700", dockerfile.replace("-m 0700", "mode 0700"))
         self.assertIn("git init -q /testbed", restore_setup)
         self.assertIn("git clean -fdx", restore_setup)
@@ -140,14 +154,27 @@ class RevertTaskGeneratorTest(unittest.TestCase):
             tasks_path=self.output,
             agent="codex",
             model="openai/gpt-5.3-codex",
-            environment="modal",
+            environment="docker",
             concurrency=8,
             jobs_dir=Path(self.temp.name) / "jobs",
         )
         content = path.read_text()
         self.assertIn("resume_trajectory: true", content)
-        self.assertIn("type: modal", content)
+        self.assertIn("type: docker", content)
         self.assertIn(f"name: {AGENT_IMPORTS['codex']}", content)
+
+    def test_job_config_rejects_non_docker_environment(self) -> None:
+        path = Path(self.temp.name) / "job.yaml"
+        with self.assertRaisesRegex(ValueError, "require local Docker"):
+            self.generator.write_job_config(
+                path,
+                tasks_path=self.output,
+                agent="codex",
+                model="openai/gpt-5.3-codex",
+                environment="modal",
+                concurrency=8,
+                jobs_dir=Path(self.temp.name) / "jobs",
+            )
 
 
 class RuntimeEvaluatorTest(unittest.TestCase):

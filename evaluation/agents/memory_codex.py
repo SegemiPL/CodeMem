@@ -6,6 +6,10 @@ from harbor.agents.installed.codex import Codex
 from harbor.environments.base import BaseEnvironment
 
 from evaluation.agents.restricted import RestrictedAgentMixin
+from evaluation.common.network_isolation import (
+    INFERENCE_RELAY_DUMMY_KEY,
+    LOOPBACK_DIRECT_ENV,
+)
 
 
 class MemoryCodex(RestrictedAgentMixin, Codex):
@@ -19,6 +23,34 @@ class MemoryCodex(RestrictedAgentMixin, Codex):
     """
 
     MEMORY_LOG_DIR = "/logs/agent/memories"
+
+    def __init__(self, *args, **kwargs):
+        # Provider-side web search would bypass the container firewall.
+        kwargs["web_search"] = "disabled"
+        super().__init__(*args, **kwargs)
+
+    def network_gateway_urls(self) -> tuple[str, ...]:
+        return (
+            self._get_env("CODEMEM_MODEL_GATEWAY_URL")
+            or self._get_env("OPENAI_BASE_URL")
+            or "https://api.openai.com/v1",
+        )
+
+    def inference_api_key(self) -> str:
+        return self._get_env("OPENAI_API_KEY") or ""
+
+    def inference_auth_mode(self) -> str:
+        return "bearer"
+
+    def inference_models(self) -> tuple[str, ...]:
+        return ((self.model_name or "").split("/")[-1],)
+
+    def agent_relay_environment(self) -> dict[str, str]:
+        return {
+            **LOOPBACK_DIRECT_ENV,
+            "OPENAI_API_KEY": INFERENCE_RELAY_DUMMY_KEY,
+            "OPENAI_BASE_URL": self.inference_relay_url(),
+        }
 
     @classmethod
     def augment_command(cls, command: str) -> str:

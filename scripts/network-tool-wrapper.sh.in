@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=@ROOT@
+export XTABLES_LIBDIR="$root/xtables"
+exec "$root/lib/loader" \
+  --library-path "$root/lib" \
+  "$root/libexec/@COMMAND@" "$@"

@@ -19,6 +19,10 @@ class HarborJobConfigTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.network_toolchain = self.root / "network"
+        (self.network_toolchain / "bin").mkdir(parents=True)
+        for executable in ("iptables", "ip6tables"):
+            (self.network_toolchain / "bin" / executable).touch()
 
     def toolchain(self, agent: str) -> Path:
         root = self.root / agent
@@ -29,10 +33,18 @@ class HarborJobConfigTest(unittest.TestCase):
 
     def write(self, agent: str = "codex", **kwargs) -> str:
         path = self.root / "job.yaml"
+        environment = kwargs.pop("environment", "docker")
+        if environment == "docker":
+            kwargs.setdefault("network_toolchain", self.network_toolchain)
         write_job_config(path, tasks_path=self.root / "tasks", agent=agent,
-            model="test/model", environment=kwargs.pop("environment", "docker"),
+            model="test/model", environment=environment,
             concurrency=1, jobs_dir=self.root / "results", n_attempts=kwargs.pop("n_attempts", 1), **kwargs)
         return path.read_text()
+
+    def test_network_toolchain_is_mounted_read_only(self) -> None:
+        content = self.write()
+        self.assertIn(f'source: "{self.network_toolchain.resolve()}"', content)
+        self.assertIn('target: "/opt/codemem-network"', content)
 
     def test_supported_agent_toolchains_are_read_only_and_on_path(self) -> None:
         for agent, definition in AGENT_TOOLCHAINS.items():
@@ -91,8 +103,12 @@ class HarborJobConfigTest(unittest.TestCase):
             self.write(n_attempts=0)
 
     def test_toolchain_rejects_non_docker_environment(self) -> None:
-        with self.assertRaisesRegex(ValueError, "only by local Docker"):
+        with self.assertRaisesRegex(ValueError, "require local Docker"):
             self.write(agent_toolchain=self.toolchain("codex"), environment="modal")
+
+    def test_jobs_without_toolchains_also_reject_non_docker(self) -> None:
+        with self.assertRaisesRegex(ValueError, "require local Docker"):
+            self.write(environment="daytona")
 
     def test_toolchain_rejects_unknown_agent(self) -> None:
         with self.assertRaisesRegex(ValueError, "supported"):
