@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluation.harbor import AGENT_TOOLCHAINS, AGENT_TOOLCHAIN_TARGET, write_job_config
+from evaluation.harbor import (
+    AGENT_TOOLCHAINS,
+    AGENT_TOOLCHAIN_TARGET,
+    PREINSTALLED_AGENT_IMPORTS,
+    write_job_config,
+)
 
 
 class HarborJobConfigTest(unittest.TestCase):
@@ -40,6 +45,22 @@ class HarborJobConfigTest(unittest.TestCase):
 
     def test_n_attempts_is_configurable(self) -> None:
         self.assertIn("n_attempts: 3", self.write(n_attempts=3))
+
+    def test_shared_kimi_toolchain_uses_preinstalled_adapter(self) -> None:
+        content = self.write(
+            "kimi-cli",
+            agent_toolchain=self.toolchain("kimi-cli"),
+            agent_version="1.49.0",
+        )
+        self.assertIn(
+            f"name: {PREINSTALLED_AGENT_IMPORTS['kimi-cli']}",
+            content,
+        )
+
+    def test_kimi_without_toolchain_keeps_builtin_adapter(self) -> None:
+        content = self.write("kimi-cli")
+        self.assertIn("name: kimi-cli", content)
+        self.assertNotIn(PREINSTALLED_AGENT_IMPORTS["kimi-cli"], content)
 
     def test_n_attempts_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least 1"):

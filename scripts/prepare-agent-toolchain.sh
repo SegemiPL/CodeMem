@@ -8,6 +8,8 @@ NODE_VERSION="22.23.1"
 PYTHON_VERSION="3.13"
 BOOTSTRAP_IMAGE="ubuntu:22.04"
 OUTPUT=""
+RG_SOURCE=""
+PYPI_INDEX_URL="${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 FORCE=false
 
 usage() {
@@ -25,6 +27,8 @@ Options:
   --node-version VERSION     Node.js version for codex/claude-code (default: 22.23.1)
   --python-version VERSION   Python version for kimi-cli (default: 3.13)
   --bootstrap-image IMAGE    Linux image used for the one-time install (default: ubuntu:22.04)
+  --rg-source PATH           Reuse an existing Linux rg binary and skip apt when possible
+  --pypi-index-url URL       Package index for Kimi CLI (default: Tsinghua mirror)
   --force                    Replace an existing toolchain after a successful rebuild
   -h, --help                 Show this help
 EOF
@@ -38,6 +42,8 @@ while (($#)); do
         --node-version) NODE_VERSION=$2; shift 2 ;;
         --python-version) PYTHON_VERSION=$2; shift 2 ;;
         --bootstrap-image) BOOTSTRAP_IMAGE=$2; shift 2 ;;
+        --rg-source) RG_SOURCE=$2; shift 2 ;;
+        --pypi-index-url) PYPI_INDEX_URL=$2; shift 2 ;;
         --force) FORCE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -67,18 +73,50 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$STAGING"
 
+if [[ -z "$RG_SOURCE" ]]; then
+    for candidate in \
+        "$ROOT_DIR/.cache/codex-toolchain/bin/rg" \
+        "$ROOT_DIR/../.cache/codex-toolchain/bin/rg"
+    do
+        if [[ -x "$candidate" ]]; then
+            RG_SOURCE=$candidate
+            break
+        fi
+    done
+fi
+docker_mounts=(-v "$STAGING:/opt/codemem-agent")
+if [[ -n "$RG_SOURCE" ]]; then
+    RG_SOURCE=$(cd "$(dirname "$RG_SOURCE")" && pwd)/$(basename "$RG_SOURCE")
+    docker_mounts+=(-v "$RG_SOURCE:/bootstrap/rg:ro")
+fi
+
 docker run --rm \
     -e AGENT="$AGENT" -e AGENT_VERSION="$AGENT_VERSION" \
     -e NODE_VERSION="$NODE_VERSION" -e PYTHON_VERSION="$PYTHON_VERSION" \
+    -e UV_DEFAULT_INDEX="$PYPI_INDEX_URL" \
     -e HTTP_PROXY="${HTTP_PROXY:-}" -e HTTPS_PROXY="${HTTPS_PROXY:-}" -e NO_PROXY="${NO_PROXY:-}" \
-    -v "$STAGING:/opt/codemem-agent" "$BOOTSTRAP_IMAGE" bash -lc '
+    "${docker_mounts[@]}" "$BOOTSTRAP_IMAGE" bash -lc '
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl ripgrep xz-utils
-rm -rf /var/lib/apt/lists/*
+need_apt=false
+command -v curl >/dev/null 2>&1 || need_apt=true
+if [[ "$AGENT" == codex || "$AGENT" == claude-code ]]; then
+    command -v xz >/dev/null 2>&1 || need_apt=true
+fi
+if [[ ! -x /bootstrap/rg ]] && ! command -v rg >/dev/null 2>&1; then
+    need_apt=true
+fi
+if [[ "$need_apt" == true ]]; then
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl ripgrep xz-utils
+    rm -rf /var/lib/apt/lists/*
+fi
 mkdir -p /opt/codemem-agent/bin
-install -m 0755 "$(command -v rg)" /opt/codemem-agent/bin/rg
+if [[ -x /bootstrap/rg ]]; then
+    install -m 0755 /bootstrap/rg /opt/codemem-agent/bin/rg
+else
+    install -m 0755 "$(command -v rg)" /opt/codemem-agent/bin/rg
+fi
 
 install_node() {
     case "$(uname -m)" in x86_64) node_arch=x64 ;; aarch64|arm64) node_arch=arm64 ;; *) exit 1 ;; esac
@@ -97,27 +135,33 @@ case "$AGENT" in
   codex)
     install_node
     npm install --global --prefix /opt/codemem-agent "@openai/codex@${AGENT_VERSION}"
-    codex --version
+    installed_version=$(codex --version)
     ;;
   claude-code)
     install_node
     npm install --global --prefix /opt/codemem-agent "@anthropic-ai/claude-code@${AGENT_VERSION}"
-    claude --version
+    installed_version=$(claude --version)
     ;;
   kimi-cli)
     export UV_TOOL_DIR=/opt/codemem-agent/uv/tools
     export UV_TOOL_BIN_DIR=/opt/codemem-agent/bin
+    export UV_PYTHON_INSTALL_DIR=/opt/codemem-agent/uv/python
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
+    install -m 0755 "$(command -v uv)" /opt/codemem-agent/bin/uv
     version_spec=""; [[ "$AGENT_VERSION" != latest ]] && version_spec="==${AGENT_VERSION}"
     uv tool install --python "$PYTHON_VERSION" "kimi-cli${version_spec}"
+    ln -sfn ../uv/tools/kimi-cli/bin/kimi /opt/codemem-agent/bin/kimi
+    ln -sfn ../uv/tools/kimi-cli/bin/kimi-cli /opt/codemem-agent/bin/kimi-cli
     export PATH="/opt/codemem-agent/bin:$PATH"
-    kimi --version
+    installed_version=$(kimi --version)
     ;;
 esac
 
 printf "%s\n" "$AGENT" > /opt/codemem-agent/AGENT
 printf "%s\n" "$AGENT_VERSION" > /opt/codemem-agent/AGENT_VERSION
+printf "%s\n" "$installed_version" > /opt/codemem-agent/INSTALLED_VERSION
+printf "%s\n" "$installed_version"
 if [[ -x /opt/codemem-agent/bin/node ]]; then node --version > /opt/codemem-agent/NODE_VERSION; fi
 '
 

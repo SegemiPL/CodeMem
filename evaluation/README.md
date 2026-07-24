@@ -48,42 +48,56 @@ From the CodeMem repository (using the workspace virtual environment):
   --concurrency 1
 ```
 
-### Shared Codex toolchain for local Docker
+### Shared agent toolchains for local Docker
 
-Harbor normally installs Codex, Node.js, and ripgrep inside every fresh task
-container. For large local-Docker jobs, prepare one versioned host toolchain
-and bind-mount it read-only into every task instead:
+Harbor normally installs Codex, Claude Code, or Kimi CLI inside every fresh
+task container. For large local-Docker jobs, prepare one versioned host
+toolchain and bind-mount it read-only into every task instead. The shared
+toolchain flow supports `codex`, `claude-code`, and `kimi-cli`:
 
 ```bash
-scripts/prepare-codex-toolchain.sh \
-  --codex-version 0.144.6 \
-  --output /data/zhuyiqi/CodeMem/.cache/codex-toolchain
+scripts/prepare-agent-toolchain.sh \
+  --agent codex \
+  --agent-version 0.144.6
+
+scripts/prepare-agent-toolchain.sh \
+  --agent claude-code \
+  --agent-version 2.1.218
+
+scripts/prepare-agent-toolchain.sh \
+  --agent kimi-cli \
+  --agent-version 1.49.0
 
 /data/zhuyiqi/CodeMem/.venv/bin/python -m evaluation.revert_eval.cli job-config \
   --agent codex \
   --model openai/gpt-5.3-codex \
   --environment docker \
-  --codex-toolchain /data/zhuyiqi/CodeMem/.cache/codex-toolchain \
-  --codex-version 0.144.6 \
+  --agent-toolchain /data/zhuyiqi/CodeMem/.cache/codex-toolchain \
+  --agent-version 0.144.6 \
   --concurrency 1
 ```
 
-The preparation script downloads the toolchain once, verifies the Node.js
-archive checksum, and stages updates before replacing an existing toolchain.
-The generated Harbor job mounts it at `/opt/codemem-agent` and adds its `bin`
-directories to the agent `PATH`. Harbor's Codex adapter then detects the
-existing executable and skips per-container apt, NVM, and npm installation.
-Use an explicit Codex version for reproducible benchmark runs; `latest` is
-convenient only for initial smoke testing. The mount is local-Docker specific
-and is rejected for Daytona or Modal jobs.
+The default outputs are `.cache/<agent>-toolchain`. The preparation script
+downloads each toolchain once and stages updates before replacing an existing
+toolchain. The generated Harbor job mounts it at `/opt/codemem-agent` and adds
+its `bin` directories to the agent `PATH`. The agent adapter then detects the
+existing executable and skips per-container installation. Use an explicit
+agent version for reproducible benchmark runs; `latest` is convenient only for
+initial smoke testing. The mount is local-Docker specific and is rejected for
+Daytona or Modal jobs.
 
 Then run the generated configuration with the Harbor checkout requested for the
 experiment (the exact launcher depends on how Harbor is installed):
 
 ```bash
-/data/zhangpeilin/miniconda3/envs/CodeMem/bin/harbor run \
+scripts/harbor.sh run \
   -c evaluation/generated/revert-job.yaml
 ```
+
+Use the repository launcher for shared Kimi jobs: it adds the CodeMem package
+to Harbor's host-side import path so Harbor can load the compatibility adapter
+that skips its otherwise-unconditional Kimi installation. Set `HARBOR_BIN` if
+Harbor is installed somewhere other than the server default.
 
 Use `--environment daytona` or `--environment modal` and raise `--concurrency`
 for a parallel provider. Provider credentials and agent credentials are handled

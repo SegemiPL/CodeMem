@@ -22,7 +22,14 @@ class AgentToolchain:
 AGENT_TOOLCHAINS: dict[str, AgentToolchain] = {
     "codex": AgentToolchain(("codex", "node", "rg"), (f"{AGENT_TOOLCHAIN_TARGET}/bin", f"{AGENT_TOOLCHAIN_TARGET}/node/bin")),
     "claude-code": AgentToolchain(("claude", "node", "rg"), (f"{AGENT_TOOLCHAIN_TARGET}/bin", f"{AGENT_TOOLCHAIN_TARGET}/node/bin")),
-    "kimi-cli": AgentToolchain(("kimi", "rg"), (f"{AGENT_TOOLCHAIN_TARGET}/bin",)),
+    "kimi-cli": AgentToolchain(("kimi", "uv", "rg"), (f"{AGENT_TOOLCHAIN_TARGET}/bin",)),
+}
+
+# Harbor 0.20's built-in Kimi adapter always reinstalls uv and kimi-cli during
+# setup. Select a compatibility subclass only when a prebuilt Kimi toolchain is
+# mounted; jobs without a shared toolchain retain Harbor's normal behavior.
+PREINSTALLED_AGENT_IMPORTS = {
+    "kimi-cli": "evaluation.agents.preinstalled_kimi:PreinstalledKimiCli",
 }
 
 
@@ -84,6 +91,7 @@ def write_job_config(
     mounts = ""
     agent_env = ""
     agent_kwargs = ""
+    configured_agent = agent
 
     # If use local agent toolchain
     if agent_toolchain is not None:
@@ -99,6 +107,7 @@ def write_job_config(
         agent_env = f'''    env:
       PATH: {json.dumps(toolchain_definition.path)}
 '''
+        configured_agent = PREINSTALLED_AGENT_IMPORTS.get(agent, agent)
 
     # Confirm the version
     if agent_version is not None:
@@ -114,7 +123,7 @@ environment:
   type: {environment}
   delete: true
 {mounts}agents:
-  - name: {agent}
+  - name: {configured_agent}
     model_name: {model}
     resume_trajectory: true
 {agent_env}{agent_kwargs}{exclude}datasets:
